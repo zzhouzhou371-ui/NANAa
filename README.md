@@ -1,56 +1,95 @@
-# Welcome to your Expo app 👋
+# Nana RN
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Nana is an Expo/React Native role-play app built around a simulated phone shell.
+The first major surface is a WeChat-like experience for chatting with custom AI
+characters, managing character memory, editing world-book entries, and preparing
+native-capable photo, microphone, camera, call, and relationship-memory flows.
 
-## Get started
+## Stack
 
-1. Install dependencies
+- Expo SDK 55
+- React Native 0.83
+- React 19
+- Expo Router
+- Zustand with AsyncStorage persistence
+- NativeWind and React Native style objects
+- EAS Build for Android preview and development builds
 
-   ```bash
-   npm install
-   ```
+## Project Shape
 
-2. Start the app
+- `src/app/_layout.tsx` sets up the simulated phone frame, app context, safe
+  areas, hardware back behavior, and router stack.
+- `src/app/index.tsx` is the route-only home entry.
+- `src/screens/home/index.tsx` renders the phone home screen and app overlay.
+- `src/stores/nanaStore.ts` owns persisted product data and transient app state.
+- `src/components/WeChatRootView.tsx` owns the WeChat-like app surface.
+- `src/services/ai.ts` builds AI context and talks to Gemini or OpenAI-compatible
+  chat-completions APIs.
+- `src/services/mediaRuntime.ts` is the boundary for voice, camera, and video
+  features. UI components should call this layer instead of native modules.
 
-   ```bash
-   npx expo start
-   ```
+## Development
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Install dependencies:
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Start the web preview:
 
-### Other setup steps
+```bash
+npm run web
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Start Metro for a development client:
 
-## Learn more
+```bash
+npm run start:dev-client
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+Generate the local Android project and open it in Android Studio:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+npm run android:generate
+npm run android:studio
+```
 
-## Join the community
+Remove rebuildable caches, old smoke output, and temporary web exports:
 
-Join our community of developers creating universal apps.
+```bash
+npm run clean:generated
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Build Android preview APK:
+
+```bash
+npm run build:android:preview
+```
+
+Run lint:
+
+```bash
+npm run lint
+```
+
+## Native Media Direction
+
+This project targets Expo SDK 55. Before changing native media code, read the
+versioned Expo docs under `https://docs.expo.dev/versions/v55.0.0/`.
+
+Current native mappings:
+
+- Voice recording and playback: `expo-audio`
+- Camera capture and camera permission: `expo-camera`
+- Video persona playback: `expo-video`
+- Photo library and system camera selection: `expo-image-picker`
+- Durable local media: `expo-file-system`
+- API-secret storage: `expo-secure-store`
+
+Keep native permission requests behind the runtime boundary in
+`src/services/mediaRuntime.ts`. Do not wire microphone, camera, or video modules
+directly inside chat components.
+
+After adding or changing native modules, create a new development or preview
+build. Expo Go is not the target runtime for this project.

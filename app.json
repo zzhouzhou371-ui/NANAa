@@ -1,44 +1,122 @@
 {
   "expo": {
-    "name": "nana-rn",
+    "name": "Nana",
     "slug": "nana-rn",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/generated/nana-app-icons-v3/theme-bright.png",
     "scheme": "nanarn",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/generated/nana-app-icons-v3/theme-bright.png",
+      "bundleIdentifier": "com.anonymous.nanarn"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#071226",
+        "foregroundImage": "./assets/generated/nana-app-icons-v3/theme-bright.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.nanarn"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/generated/nana-app-icons-v3/theme-bright.png"
     },
     "plugins": [
       "expo-router",
       [
-        "expo-splash-screen",
+        "expo-dev-client",
         {
-          "backgroundColor": "#208AEF",
+          "launchMode": "most-recent",
           "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
+            "launchMode": "most-recent",
+            "defaultLaunchURL": "http://localhost:8081"
           }
         }
-      ]
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#071226",
+          "image": "./assets/generated/nana-app-icons-v3/theme-bright.png",
+          "imageWidth": 180,
+          "android": {
+            "image": "./assets/generated/nana-app-icons-v3/theme-bright.png",
+            "imageWidth": 180
+          }
+        }
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-web-browser",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Nana to record voice messages and call audio.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Nana to use the camera during video calls.",
+          "microphonePermission": "Allow Nana to record voice messages and call audio.",
+          "recordAudioAndroid": true,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": false,
+          "supportsPictureInPicture": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Nana to choose character portraits and photos you decide to share in your relationship.",
+          "cameraPermission": "Allow Nana to take photos you choose to share in chat.",
+          "microphonePermission": false,
+          "colors": {
+            "cropBackgroundColor": "#F5EEE9",
+            "cropToolbarColor": "#121A36",
+            "cropToolbarIconColor": "#ECA89A",
+            "cropToolbarActionTextColor": "#F2AA98",
+            "cropBackButtonIconColor": "#ECA89A"
+          },
+          "dark": {
+            "colors": {
+              "cropBackgroundColor": "#071226",
+              "cropToolbarColor": "#101833",
+              "cropToolbarIconColor": "#F2AA98",
+              "cropToolbarActionTextColor": "#F2AA98",
+              "cropBackButtonIconColor": "#F2AA98"
+            }
+          }
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Nana to use your approximate location to show local weather on the simulated phone."
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f1085548-c7bf-4178-b64d-ae79eee9630a"
+      }
     }
   }
 }
