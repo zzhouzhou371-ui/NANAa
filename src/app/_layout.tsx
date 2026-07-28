@@ -149,6 +149,7 @@ export default function RootLayout() {
       if (hydratedState.newCharAvatar) referencedAvatars.add(hydratedState.newCharAvatar);
       if (hydratedState.tempMyAvatar) referencedAvatars.add(hydratedState.tempMyAvatar);
       pruneUnreferencedAvatarFiles(referencedAvatars);
+      useNanaStore.getState().reconcileChatDeliveryStates();
       void useNanaStore.getState().reconcilePayments();
       void useNanaStore.getState().runProactiveChatHeartbeat();
       setStorageReady(true);
@@ -173,6 +174,7 @@ export default function RootLayout() {
       const previousState = appStateRef.current;
       appStateRef.current = nextState;
       if (storageReady && previousState !== 'active' && nextState === 'active') {
+        useNanaStore.getState().reconcileChatDeliveryStates();
         void useNanaStore.getState().reconcilePayments();
         void useNanaStore.getState().runProactiveChatHeartbeat();
       }

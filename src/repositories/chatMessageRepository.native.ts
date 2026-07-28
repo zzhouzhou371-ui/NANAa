@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import type { ChatHistory, Message } from '../types';
+import { normalizeMessageDelivery } from '../services/messageDeliveryRuntime';
 
 const DATABASE_NAME = 'nana-chat.db';
 const DATABASE_VERSION = 1;
@@ -29,7 +30,7 @@ const isMessage = (value: unknown): value is Message => {
 const parseMessage = (payload: string): Message | null => {
   try {
     const value: unknown = JSON.parse(payload);
-    return isMessage(value) ? value : null;
+    return isMessage(value) ? normalizeMessageDelivery(value) : null;
   } catch {
     return null;
   }

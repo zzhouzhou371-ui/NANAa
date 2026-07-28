@@ -131,6 +131,12 @@ baked interaction layers.
   output can produce one to three independent bubbles, delivered sequentially
   with request-token cancellation preserved through the final bubble. Voice
   remains one coherent message.
+- New outgoing messages now persist a monotonic sending, sent, delivered, read,
+  or failed state in their existing SQLite payload. Consecutive bubbles share
+  one turn and the character waits for the full reading window before reply
+  generation. A failed turn retries the same message IDs, preserving order
+  without duplicate bubbles; restart recovery may restore delivery but never
+  fabricates a read.
 - Online characters now have durable proactive-message schedules. First launch
   only initializes a future due time; chat activity postpones it, successful
   outreach enters a longer per-character cooldown, and a global cooldown stops
@@ -171,8 +177,8 @@ baked interaction layers.
 - Contracts: `test:text`, `test:media`, `test:voice-gesture`,
   `test:call-audio-route`, `test:call-voice-activity`, `test:payment`,
   `test:storage`, `test:chat-storage`, `test:trace`, `test:memory-context`,
-  `test:memory-correction`, `test:chat`, `test:chat-rhythm`, and
-  `test:proactive-chat`.
+  `test:memory-correction`, `test:chat`, `test:chat-rhythm`,
+  `test:message-delivery`, and `test:proactive-chat`.
 - UI smoke: four viewports (390x844, 412x915, 360x800, 320x568), seven core
   screens per viewport, screenshots plus console/page-error and overflow checks.
   The pre-UI-polish regression baseline generated on 2026-07-16 is in
@@ -207,6 +213,11 @@ baked interaction layers.
   360x800 path at `screenshots/smoke-proactive-profile/report.json`; the online
   profile switch remains readable without displacing the existing reply and
   video capability rows.
+- The outgoing-delivery pass adds deterministic transport/read planning,
+  persisted lifecycle normalization, duplicate-safe turn retry, foreground
+  recovery, and a dedicated `test:message-delivery` contract. The complete
+  360x800 chat, voice, payment, avatar, and call smoke path passes at
+  `screenshots/smoke-message-delivery/report.json`.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -258,15 +269,14 @@ have a clear relationship job and write to the same trace system.
    app is closed, preserving the current durable cooldown and eligibility rules.
 2. Add an explicit user-facing network/cost policy for model-generated
    proactive messages before enabling closed-app background generation.
-3. Add explicit delivery/read state and retry semantics for outgoing messages.
-4. Run the current SQLite migration, high-volume chat, model-backed rhythm, and
+3. Run the current SQLite migration, high-volume chat, model-backed rhythm, and
    persona/event-driven proactive checks together on a physical Android device
    when the next test APK is intentionally prepared.
-5. Continue the online memory vertical slice with canonical fact extraction
+4. Continue the online memory vertical slice with canonical fact extraction
    and deterministic recall scoring after sustained real-model conversations
    provide test data.
-6. Establish Apple signing/device access and run the same physical-device
+5. Establish Apple signing/device access and run the same physical-device
    matrix on iOS.
-7. Build offline meeting later as a standalone simulated-phone app with its own
+6. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

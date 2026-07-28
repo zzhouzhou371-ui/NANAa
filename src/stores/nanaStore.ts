@@ -45,6 +45,11 @@ import {
   type ChatGenerationSource,
 } from '../services/chatRhythmRuntime';
 import {
+  planMessageDelivery,
+  resetFailedMessageDelivery,
+  transitionMessageDelivery,
+} from '../services/messageDeliveryRuntime';
+import {
   createInitialProactiveSchedule,
   createLocalProactiveMessage,
   normalizeProactiveChatSchedules,
@@ -280,6 +285,133 @@ const unreadAfterRemoteEvent = (state: NanaStore, chatId: string) => (
     : (state.unreadCounts[chatId] || 0) + 1
 );
 
+interface MessageDeliveryTimer {
+  chatId: string;
+  messageId: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const messageDeliveryTimers = new Map<string, MessageDeliveryTimer>();
+
+const updateMessageDeliveryStatus = (
+  chatId: string,
+  messageIds: readonly number[],
+  status: Message['deliveryStatus'],
+  now = Date.now(),
+  failureMessage?: string,
+) => {
+  if (!status || messageIds.length === 0) return;
+  const targetIds = new Set(messageIds);
+  useNanaStore.setState(state => {
+    const current = state.chatHistory[chatId] || [];
+    let changed = false;
+    const next = current.map(message => {
+      if (!targetIds.has(message.id)) return message;
+      const transitioned = transitionMessageDelivery(message, status, now, failureMessage);
+      if (transitioned !== message) changed = true;
+      return transitioned;
+    });
+    return changed
+      ? { chatHistory: { ...state.chatHistory, [chatId]: next } }
+      : {};
+  });
+};
+
+const cancelMessageDeliveryTimers = (
+  chatId: string,
+  messageIds?: readonly number[],
+) => {
+  const targetIds = messageIds ? new Set(messageIds) : null;
+  for (const [key, scheduled] of messageDeliveryTimers) {
+    if (scheduled.chatId !== chatId) continue;
+    if (targetIds && !targetIds.has(scheduled.messageId)) continue;
+    clearTimeout(scheduled.timer);
+    messageDeliveryTimers.delete(key);
+  }
+};
+
+const scheduleMessageDeliveryTransition = (
+  chatId: string,
+  messageId: number,
+  status: 'sent' | 'delivered',
+  transitionAt: number,
+) => {
+  const key = `${chatId}:${messageId}:${status}`;
+  const existing = messageDeliveryTimers.get(key);
+  if (existing) clearTimeout(existing.timer);
+  const delay = Math.max(0, Math.min(2_147_483_647, transitionAt - Date.now()));
+  const timer = setTimeout(() => {
+    messageDeliveryTimers.delete(key);
+    updateMessageDeliveryStatus(chatId, [messageId], status, Date.now());
+  }, delay);
+  messageDeliveryTimers.set(key, { chatId, messageId, timer });
+};
+
+const scheduleOutgoingMessageDelivery = (
+  chatId: string,
+  characterId: string,
+  message: Message,
+  fast: boolean,
+) => {
+  const attemptedAt = message.deliveryAttemptedAt || message.createdAt || Date.now();
+  const plan = planMessageDelivery({
+    characterId,
+    messageId: message.id,
+    messageText: message.transcript || message.text,
+    attemptedAt,
+    fast,
+  });
+  if (fast) {
+    updateMessageDeliveryStatus(chatId, [message.id], 'sent', plan.sentAt);
+    updateMessageDeliveryStatus(chatId, [message.id], 'delivered', plan.deliveredAt);
+    return plan;
+  }
+  scheduleMessageDeliveryTransition(chatId, message.id, 'sent', plan.sentAt);
+  scheduleMessageDeliveryTransition(chatId, message.id, 'delivered', plan.deliveredAt);
+  return plan;
+};
+
+const messageIdsForTurn = (chatId: string, turnId: string) => (
+  (useNanaStore.getState().chatHistory[chatId] || [])
+    .filter(message => message.sender === 'user' && message.turnId === turnId)
+    .map(message => message.id)
+);
+
+const waitForOutgoingTurnReadWindow = async (
+  chatId: string,
+  characterId: string,
+  turnId: string,
+  fast: boolean,
+) => {
+  const now = Date.now();
+  const messages = (useNanaStore.getState().chatHistory[chatId] || [])
+    .filter(message => message.sender === 'user' && message.turnId === turnId);
+  const readNotBefore = messages.reduce((latest, message) => {
+    const attemptedAt = message.deliveryAttemptedAt || message.createdAt || now;
+    const plan = planMessageDelivery({
+      characterId,
+      messageId: message.id,
+      messageText: message.transcript || message.text,
+      attemptedAt,
+      fast,
+    });
+    return Math.max(latest, plan.readNotBefore);
+  }, now);
+  const delay = Math.max(0, readNotBefore - Date.now());
+  if (delay > 0) await new Promise<void>(resolve => setTimeout(resolve, delay));
+};
+
+const transitionOutgoingTurn = (
+  chatId: string,
+  turnId: string,
+  status: 'read' | 'failed',
+  failureMessage?: string,
+) => {
+  const messageIds = messageIdsForTurn(chatId, turnId);
+  cancelMessageDeliveryTimers(chatId, messageIds);
+  updateMessageDeliveryStatus(chatId, messageIds, status, Date.now(), failureMessage);
+};
+
 let proactiveHeartbeatInFlight = false;
 
 export interface SendChatMessageOptions {
@@ -287,6 +419,8 @@ export interface SendChatMessageOptions {
   skipUserAppend?: boolean;
   sourceMessageId?: number;
   targetChatId?: string;
+  retryMessageIds?: number[];
+  turnIdOverride?: string;
 }
 
 export interface PaymentTransitionMeta {
@@ -478,6 +612,7 @@ export interface NanaStore {
   transitionPayment: (id: string, next: PaymentStatus, meta?: PaymentTransitionMeta) => boolean;
   retryPayment: (id: string) => Promise<void>;
   reconcilePayments: (now?: number) => Promise<void>;
+  reconcileChatDeliveryStates: (now?: number) => void;
   runProactiveChatHeartbeat: (now?: number) => Promise<void>;
   retryChatMessage: (errorMessageId: number) => Promise<void>;
   startOutgoingCall: (type: 'voice' | 'video') => void;
@@ -982,6 +1117,7 @@ export const useNanaStore = create<NanaStore>()(
       clearChat: (chatId) => {
         if (!chatId) return;
         cancelUserMessageBurst(chatId);
+        cancelMessageDeliveryTimers(chatId);
         set(state => {
           const visiblePayments = Object.values(state.paymentsById)
             .filter(payment => payment.chatId === chatId && paymentMustRemainVisibleDuringChatClear(payment))
@@ -1471,6 +1607,30 @@ export const useNanaStore = create<NanaStore>()(
         }
       },
 
+      reconcileChatDeliveryStates: (now = Date.now()) => {
+        set(state => {
+          let changed = false;
+          const chatHistory: ChatHistory = {};
+          for (const [chatId, messages] of Object.entries(state.chatHistory)) {
+            let chatChanged = false;
+            const nextMessages = messages.map(message => {
+              if (
+                message.sender !== 'user'
+                || (message.deliveryStatus !== 'sending' && message.deliveryStatus !== 'sent')
+              ) return message;
+              const delivered = transitionMessageDelivery(message, 'delivered', now);
+              if (delivered !== message) {
+                chatChanged = true;
+                changed = true;
+              }
+              return delivered;
+            });
+            chatHistory[chatId] = chatChanged ? nextMessages : messages;
+          }
+          return changed ? { chatHistory } : {};
+        });
+      },
+
       sendChatMessage: async (type = 'text', amount, note, mediaCapture, options) => {
         const state = get();
         const copy = runtimeCopyFor(state.themeConfig.language);
@@ -1584,8 +1744,18 @@ export const useNanaStore = create<NanaStore>()(
               : (note || '');
         const activeChar = state.characters.find(c => c.id === chatId);
         const interactionAt = Date.now();
-        const messageId = nextMessageId();
+        const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
+        const messageId = options?.skipUserAppend && options.sourceMessageId
+          ? options.sourceMessageId
+          : nextMessageId();
         const sourceMessageId = options?.sourceMessageId ?? messageId;
+        const turnId = options?.turnIdOverride
+          || (joiningUserBurst && pendingRequestId
+            ? pendingRequestId
+            : `reply:${chatId}:${sourceMessageId}:${interactionAt}`);
+        const deliveryMessageIds = options?.retryMessageIds?.length
+          ? [...new Set(options.retryMessageIds)]
+          : [messageId];
         const realTime = new Date(interactionAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const replyMode = characterReplyMode(activeChar);
         const voiceDraft = type !== 'voice'
@@ -1607,6 +1777,12 @@ export const useNanaStore = create<NanaStore>()(
           type,
           amount,
           note,
+          createdAt: interactionAt,
+          turnId,
+          deliveryStatus: 'sending',
+          deliveryAttemptedAt: interactionAt,
+          deliveryUpdatedAt: interactionAt,
+          deliveryAttemptCount: 1,
           ...(voiceDraft ? {
             audioUri: voiceDraft.audioUri,
             audioDurationSec: voiceDraft.audioDurationSec,
@@ -1677,6 +1853,14 @@ export const useNanaStore = create<NanaStore>()(
             : { chatPanel: 'none' as ChatPanel }),
         }));
 
+        for (const deliveryMessageId of deliveryMessageIds) {
+          const deliveryMessage = (get().chatHistory[chatId] || [])
+            .find(message => message.id === deliveryMessageId);
+          if (deliveryMessage) {
+            scheduleOutgoingMessageDelivery(chatId, chatId, deliveryMessage, fastChat);
+          }
+        }
+
         if (joiningUserBurst && pendingRequestId) {
           appendUserMessageToBurst(chatId, pendingRequestId, {
             sourceMessageId,
@@ -1710,6 +1894,12 @@ export const useNanaStore = create<NanaStore>()(
             ? transcriptCapture.transcript?.trim()
             : undefined;
           if (!transcript) {
+            transitionOutgoingTurn(
+              chatId,
+              turnId,
+              'failed',
+              transcriptCapture.errorMessage || copy.voiceTranscriptionFailed,
+            );
             set(s => ({
               relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
                 characterId: chatId,
@@ -1761,6 +1951,9 @@ export const useNanaStore = create<NanaStore>()(
         }
 
         if (type === 'image') {
+          await waitForOutgoingTurnReadWindow(chatId, chatId, turnId, fastChat);
+          if (!sourceMessageStillExists()) return;
+          transitionOutgoingTurn(chatId, turnId, 'read');
           triggerHaptic('success');
           set({
             islandNotification: {
@@ -1776,10 +1969,9 @@ export const useNanaStore = create<NanaStore>()(
 
         if (!sourceMessageStillExists()) return;
 
-        const requestId = `reply:${chatId}:${sourceMessageId}:${Date.now()}`;
+        const requestId = turnId;
         const hasRemoteApiKey = state.apiKey.trim().length > 0;
         const generationSource: ChatGenerationSource = hasRemoteApiKey ? 'remote' : 'localSandbox';
-        const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
         if (type === 'text') {
           beginUserMessageBurst(chatId, requestId, {
             sourceMessageId,
@@ -1788,8 +1980,6 @@ export const useNanaStore = create<NanaStore>()(
         }
         set(s => ({
           pendingChatRequests: beginChatRequest(s.pendingChatRequests, chatId, requestId).pending,
-          islandNotification: { title: activeChar?.name || 'AI', desc: copy.typing, icon: activeChar?.avatar, status: 'typing' },
-          isGenerating: true,
         }));
 
         try {
@@ -1803,6 +1993,21 @@ export const useNanaStore = create<NanaStore>()(
             cancelUserMessageBurst(chatId, requestId);
             userText = burstItems.map(item => item.text).join('\n');
           }
+          await waitForOutgoingTurnReadWindow(chatId, chatId, requestId, fastChat);
+          if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
+          set(current => (
+            isCurrentChatRequest(current.pendingChatRequests, chatId, requestId)
+              ? {
+                  islandNotification: {
+                    title: activeChar?.name || 'AI',
+                    desc: copy.typing,
+                    icon: activeChar?.avatar,
+                    status: 'typing',
+                  },
+                  isGenerating: true,
+                }
+              : {}
+          ));
           const replyPlan = planChatReply({
             characterId: chatId,
             userText,
@@ -1834,6 +2039,7 @@ export const useNanaStore = create<NanaStore>()(
             ? parsedReplyMessages
             : [rawReplyText.trim() || (copy.language === 'zh' ? '我在。' : "I'm here.")];
           const normalizedReplyText = replyMessages.join(' ');
+          transitionOutgoingTurn(chatId, requestId, 'read');
           await waitForChatReplyPlan(replyPlan);
           if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
 
@@ -1963,6 +2169,7 @@ export const useNanaStore = create<NanaStore>()(
           cancelUserMessageBurst(chatId, requestId);
           console.error(error);
           const failureMessage = error instanceof Error ? error.message : copy.apiCallFailed;
+          transitionOutgoingTurn(chatId, requestId, 'failed', failureMessage);
           let didCommit = false;
           set(s => {
             const completion = completeChatRequest(s.pendingChatRequests, chatId, requestId);
@@ -1970,18 +2177,14 @@ export const useNanaStore = create<NanaStore>()(
             const nextPending = completion.pending;
             didCommit = true;
             return {
-              islandNotification: null,
+              islandNotification: {
+                title: activeChar?.name || 'AI',
+                desc: failureMessage,
+                icon: activeChar?.avatar,
+                status: 'error',
+              },
               isGenerating: Object.keys(nextPending).length > 0,
               pendingChatRequests: nextPending,
-              chatHistory: {
-                ...s.chatHistory,
-                [chatId]: [...(s.chatHistory[chatId] || []), {
-                  id: nextMessageId(), sender: 'system',
-                  text: copy.language === 'zh' ? `错误：${failureMessage}` : `Error: ${failureMessage}`,
-                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                  type: 'system',
-                }],
-              },
               relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
                 characterId: chatId,
                 source: traceSource,
@@ -1992,13 +2195,12 @@ export const useNanaStore = create<NanaStore>()(
                 recallWeight: type === 'voice' ? 0.5 : 0.25,
                 state: 'failed',
               })),
-              unreadCounts: {
-                ...s.unreadCounts,
-                [chatId]: unreadAfterRemoteEvent(s, chatId),
-              },
             };
           });
-          if (didCommit) triggerHaptic('error');
+          if (didCommit) {
+            triggerHaptic('error');
+            setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2600);
+          }
         }
       },
 
@@ -2171,15 +2373,83 @@ export const useNanaStore = create<NanaStore>()(
         const chatId = state.activeChatId;
         if (!chatId || state.pendingChatRequests[chatId]) return;
         const history = state.chatHistory[chatId] || [];
+        const failedMessage = history.find(message => (
+          message.id === errorMessageId
+          && message.sender === 'user'
+          && message.deliveryStatus === 'failed'
+        ));
+        if (failedMessage) {
+          const turnId = failedMessage.turnId
+            || `reply:${chatId}:${failedMessage.id}:${Date.now()}`;
+          const retryMessages = failedMessage.turnId
+            ? history.filter(message => (
+                message.sender === 'user'
+                && message.turnId === failedMessage.turnId
+                && message.deliveryStatus === 'failed'
+              ))
+            : [failedMessage];
+          if (retryMessages.length === 0) return;
+          const retryMessageIds = retryMessages.map(message => message.id);
+          const original = retryMessages[0];
+          const retryText = retryMessages
+            .map(message => message.transcript || message.text)
+            .filter(Boolean)
+            .join('\n');
+          const retryAt = Date.now();
+          cancelMessageDeliveryTimers(chatId, retryMessageIds);
+          set(current => ({
+            chatHistory: {
+              ...current.chatHistory,
+              [chatId]: (current.chatHistory[chatId] || []).map(message => (
+                retryMessageIds.includes(message.id)
+                  ? {
+                      ...resetFailedMessageDelivery(message, retryAt),
+                      turnId,
+                    }
+                  : message
+              )),
+            },
+          }));
+          await get().sendChatMessage(
+            retryMessages.length === 1 && original.type === 'voice' ? 'voice' : 'text',
+            original.amount,
+            original.note,
+            undefined,
+            {
+              textOverride: retryText,
+              skipUserAppend: true,
+              sourceMessageId: original.id,
+              retryMessageIds,
+              turnIdOverride: turnId,
+            },
+          );
+          return;
+        }
+
         const errorIndex = history.findIndex(message => message.id === errorMessageId && message.sender === 'system');
         if (errorIndex < 0) return;
         const original = history.slice(0, errorIndex).reverse().find(message => message.sender === 'user');
         if (!original) return;
 
+        const retryAt = Date.now();
+        const legacyTurnId = original.turnId || `reply:${chatId}:${original.id}:${retryAt}`;
         set(s => ({
           chatHistory: {
             ...s.chatHistory,
-            [chatId]: (s.chatHistory[chatId] || []).filter(message => message.id !== errorMessageId),
+            [chatId]: (s.chatHistory[chatId] || [])
+              .filter(message => message.id !== errorMessageId)
+              .map(message => (
+                message.id === original.id
+                  ? {
+                      ...message,
+                      turnId: legacyTurnId,
+                      deliveryStatus: 'sending',
+                      deliveryAttemptedAt: retryAt,
+                      deliveryUpdatedAt: retryAt,
+                      deliveryAttemptCount: Math.max(1, message.deliveryAttemptCount || 0) + 1,
+                    }
+                  : message
+              )),
           },
         }));
         await get().sendChatMessage(
@@ -2191,6 +2461,8 @@ export const useNanaStore = create<NanaStore>()(
             textOverride: original.transcript || original.text,
             skipUserAppend: true,
             sourceMessageId: original.id,
+            retryMessageIds: [original.id],
+            turnIdOverride: legacyTurnId,
           },
         );
       },

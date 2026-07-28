@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 export type LegacyPaymentMessageType = 'transfer' | 'redpacket' | 'transfer_received' | 'redpacket_received';
 export type MessageType = 'text' | 'voice' | 'image' | 'payment' | LegacyPaymentMessageType | 'system';
+export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 /** @deprecated Persisted V1/UI compatibility. New product code uses ChatReplyPreference. */
 export type ReplyMode = 'auto' | 'text' | 'voice';
@@ -62,6 +63,17 @@ export interface Message {
   replyMode?: ReplyMode;
   paymentId?: string;
   generationSource?: 'remote' | 'localSandbox' | 'proactive';
+  createdAt?: number;
+  turnId?: string;
+  deliveryStatus?: MessageDeliveryStatus;
+  deliveryAttemptedAt?: number;
+  deliveryUpdatedAt?: number;
+  deliveryAttemptCount?: number;
+  sentAt?: number;
+  deliveredAt?: number;
+  readAt?: number;
+  failedAt?: number;
+  failureMessage?: string;
 }
 
 export type ChatHistory = Record<string, Message[]>;

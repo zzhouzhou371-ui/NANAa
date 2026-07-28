@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatHistory, Message } from '../types';
+import { normalizeMessageDelivery } from '../services/messageDeliveryRuntime';
 
 const WEB_CHAT_HISTORY_KEY = '@nana/chat-history-v1';
 
@@ -17,7 +18,7 @@ const normalizeHistory = (value: unknown): ChatHistory => {
   const history: ChatHistory = {};
   for (const [chatId, messages] of Object.entries(value)) {
     if (!Array.isArray(messages)) continue;
-    history[chatId] = messages.filter(isMessage);
+    history[chatId] = messages.filter(isMessage).map(normalizeMessageDelivery);
   }
   return history;
 };

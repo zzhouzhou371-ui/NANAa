@@ -233,6 +233,26 @@ Online turns support bursts in both directions:
 - Voice replies intentionally collapse the generated bubbles back into one
   spoken message.
 
+Outgoing online messages have a separate durable transport lifecycle in
+`src/services/messageDeliveryRuntime.ts`:
+
+- New user messages move monotonically through `sending`, `sent`, `delivered`,
+  and `read`. Transport and reading windows are deterministic from character
+  presence, message identity, and message length; the fast-chat flag collapses
+  them only for automated testing.
+- Consecutive user bubbles share one `turnId`. Reply generation waits for the
+  entire turn's reading window and marks the whole turn read only after reply
+  generation succeeds.
+- A provider or generation failure marks the original user bubbles failed.
+  Retry resets those same message IDs and replays their original turn, so
+  SQLite persistence and UI cannot create a duplicate outgoing bubble.
+- Full message payloads already live in SQLite JSON, so these optional fields
+  require no table migration. Repository load normalization strips malformed
+  delivery metadata and leaves legacy messages without a fabricated status.
+- Startup and foreground reconciliation advance interrupted local
+  `sending`/`sent` transport to `delivered`, but never invent a character read.
+  Clearing a chat cancels its remaining in-process delivery timers.
+
 Proactive online outreach is a durable relationship rhythm, not an unbounded
 background loop:
 

@@ -147,6 +147,14 @@ function paymentStatusLabel(payment: Payment, characterName: string, t: Record<s
   return t.paymentFailedRetry;
 }
 
+function messageDeliveryLabel(message: Message, t: Record<string, string>) {
+  if (message.deliveryStatus === 'sending') return t.messageSending;
+  if (message.deliveryStatus === 'sent') return t.messageSent;
+  if (message.deliveryStatus === 'delivered') return t.messageDelivered;
+  if (message.deliveryStatus === 'read') return t.messageRead;
+  return t.messageFailed;
+}
+
 function PaymentCard({
   payment,
   characterName,
@@ -334,6 +342,8 @@ export function ChatMessageBubble({
   }, [msg.id]);
 
   const isPayment = !!payment;
+  const showDeliveryStatus = msg.sender === 'user' && !!msg.deliveryStatus && !isPayment;
+  const deliveryFailed = msg.deliveryStatus === 'failed';
   const isImage = msg.type === 'image' && !!msg.imageUri;
   const isVoice = msg.type === 'voice';
   const isVideoCallEvent = msg.sender === 'system' && (/\bvideo call\b/i.test(msg.text) || /视频通话/.test(msg.text));
@@ -524,6 +534,39 @@ export function ChatMessageBubble({
           ) : null}
         </View>
       </View>
+
+      {showDeliveryStatus ? (
+        <View
+          testID={`message-delivery-${msg.id}`}
+          style={{ minHeight: 18, alignItems: 'flex-end', justifyContent: 'center', paddingRight: 50, marginTop: 1 }}
+        >
+          {deliveryFailed ? (
+            <AnimatedPressable
+              accessibilityRole="button"
+              accessibilityLabel={`${t.messageFailed}. ${t.retryMessage}`}
+              accessibilityHint={t.messageRetryHint}
+              disabled={isGenerating}
+              hitSlop={8}
+              onPress={isGenerating ? undefined : onRetry}
+              style={{ minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 5, opacity: isGenerating ? 0.5 : 1 }}
+            >
+              <CircleAlert size={12} color={wechatTheme.peach} strokeWidth={1.9} />
+              <Text style={{ color: wechatTheme.peach, fontSize: 11, lineHeight: 15, fontWeight: '600' }}>
+                {t.messageFailed} · {t.retryMessage}
+              </Text>
+            </AnimatedPressable>
+          ) : (
+            <View accessible accessibilityLabel={messageDeliveryLabel(msg, t)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              {msg.deliveryStatus === 'sending' ? (
+                <LoaderCircle size={10} color={wechatTheme.inkSoft} strokeWidth={1.8} />
+              ) : null}
+              <Text style={{ color: wechatTheme.inkSoft, fontSize: 10, lineHeight: 14 }}>
+                {messageDeliveryLabel(msg, t)}
+              </Text>
+            </View>
+          )}
+        </View>
+      ) : null}
 
       <PaymentDetailSheet payment={payment} characterName={characterName} visible={paymentDetailsVisible} onClose={() => setPaymentDetailsVisible(false)} />
     </View>
