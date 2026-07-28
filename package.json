@@ -31,6 +31,7 @@
     "test:memory-context": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-memory-context-contract.mjs",
     "test:memory-correction": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-memory-correction-contract.mjs",
     "test:chat": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-request-contract.mjs",
+    "test:chat-storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-storage-contract.mjs",
     "test:storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-storage-contract.mjs",
     "test:glass": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-glass-material-contract.mjs",
     "lint": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./node_modules/eslint/bin/eslint.js ."
@@ -43,6 +44,7 @@
     "@react-navigation/bottom-tabs": "^7.15.5",
     "@react-navigation/elements": "^2.9.10",
     "@react-navigation/native": "^7.1.33",
+    "@shopify/flash-list": "2.0.2",
     "@shopify/react-native-skia": "2.4.18",
     "babel-preset-expo": "~55.0.8",
     "expo": "~55.0.28",
@@ -68,6 +70,7 @@
     "expo-secure-store": "~55.0.16",
     "expo-speech": "~55.0.16",
     "expo-splash-screen": "~55.0.23",
+    "expo-sqlite": "~55.0.18",
     "expo-status-bar": "~55.0.6",
     "expo-symbols": "~55.0.9",
     "expo-system-ui": "~55.0.20",

@@ -127,6 +127,15 @@ baked interaction layers.
   migration removes legacy plaintext only after safe migration.
 - Export/import is redacted, schema/size/field validated, version checked, and
   rollback protected. Clear data restores the full initial store.
+- Native chat history now uses a WAL-enabled Expo SQLite message repository
+  instead of being rewritten inside the Zustand AsyncStorage JSON on every
+  update. Existing installs migrate their legacy history once, web smoke tests
+  retain an isolated compatibility repository, and portable export/import
+  still carries the complete conversation history with database-aware rollback.
+- The chat surface now uses FlashList recycling and starts from the newest
+  messages, so off-screen historical bubbles are not all mounted at once.
+  Existing bubble, payment, voice, retry, selection, and memory behavior remains
+  unchanged.
 
 ## Verification
 
@@ -134,7 +143,7 @@ baked interaction layers.
 - ESLint: `npm run lint`.
 - Contracts: `test:text`, `test:media`, `test:voice-gesture`,
   `test:call-audio-route`, `test:call-voice-activity`, `test:payment`,
-  `test:storage`, `test:trace`, `test:memory-context`,
+  `test:storage`, `test:chat-storage`, `test:trace`, `test:memory-context`,
   `test:memory-correction`, and `test:chat`.
 - UI smoke: four viewports (390x844, 412x915, 360x800, 320x568), seven core
   screens per viewport, screenshots plus console/page-error and overflow checks.
@@ -148,6 +157,11 @@ baked interaction layers.
 - The post-theme 360x800 smoke path passes home, Discover neumorphic material,
   chat/voice gestures, payment states, custom avatar, and voice/video call
   states. Its current report is `screenshots/smoke-final/report.json`.
+- The 2026-07-28 long-term chat storage pass completed TypeScript, ESLint,
+  storage/chat/memory/media/payment/call contracts, and the full four-viewport
+  UI smoke path after the SQLite and FlashList migration. A deterministic
+  2,000-message small-Android stress path also reached the newest message while
+  mounting fewer than 200 bubble nodes, confirming list recycling.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -195,14 +209,17 @@ have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Install Android development client versionCode 13 and run the Android
-   physical-device permission and restart matrix.
-2. Establish Apple signing/device access, build the iOS development client, and
+1. Regenerate the Android native project for `expo-sqlite`, compile a new
+   binary, and run legacy-migration/restart plus high-volume chat checks on a
+   physical Android device.
+2. Build a standalone Android preview APK for sustained model and memory use
+   without Metro or USB.
+3. Establish Apple signing/device access, build the iOS development client, and
    run the same physical-device matrix on iOS.
-3. Continue the online memory vertical slice with canonical fact extraction,
+4. Continue the online memory vertical slice with canonical fact extraction,
    deterministic recall scoring, and a future product flow for reviewing
    corrections after the frontend freeze ends.
-4. Add automated native end-to-end coverage where the build environment allows.
-5. Build offline meeting later as a standalone simulated-phone app with its own
+5. Add automated native end-to-end coverage where the build environment allows.
+6. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

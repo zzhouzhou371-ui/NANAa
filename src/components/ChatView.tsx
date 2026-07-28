@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Keyboard, Platform, ScrollView, View, useWindowDimensions } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Keyboard, Platform, View, useWindowDimensions } from 'react-native';
+import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { useApp } from '../context/AppContext';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { useNanaStore } from '../stores/nanaStore';
@@ -37,6 +38,7 @@ type NanaSmokeScope = typeof globalThis & {
   __NANA_SMOKE_SET_CUSTOM_AVATAR__?: (enabled: boolean) => void;
   __NANA_SMOKE_SET_BUBBLE_VARIANT__?: (variant: 'a' | 'b') => void;
   __NANA_SMOKE_ADD_VOICE_SAMPLE__?: () => void;
+  __NANA_SMOKE_SEED_LONG_CHAT__?: (count?: number) => void;
   __NANA_SMOKE_SET_LANGUAGE__?: (language: 'en' | 'zh') => void;
 };
 
@@ -63,7 +65,7 @@ const shouldShowTimeSeparator = (messages: Message[], index: number) => {
 
 export function ChatView() {
   const { t, renderAvatar } = useApp();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlashListRef<Message>>(null);
   const initialScrollChatId = useRef<string | null>(null);
   const lastMessageCount = useRef(0);
   const kbHeight = useKeyboardHeight();
@@ -80,7 +82,10 @@ export function ChatView() {
   const chatPanel = useNanaStore(state => state.chatPanel);
   const paymentModal = useNanaStore(state => state.paymentModal);
 
-  const messages = activeChatId ? chatHistory[activeChatId] || [] : [];
+  const messages = useMemo(
+    () => activeChatId ? chatHistory[activeChatId] || [] : [],
+    [activeChatId, chatHistory],
+  );
   const messageCount = messages.length;
   const isGenerating = activeChatId ? !!pendingChatRequests[activeChatId] : false;
   const paymentModalOpen =
@@ -177,12 +182,28 @@ export function ChatView() {
         };
       });
     };
+    scope.__NANA_SMOKE_SEED_LONG_CHAT__ = (requestedCount = 2_000) => {
+      const count = Math.max(1, Math.min(5_000, Math.floor(requestedCount)));
+      useNanaStore.setState(current => ({
+        chatHistory: {
+          ...current.chatHistory,
+          [activeChatId]: Array.from({ length: count }, (_, index) => ({
+            id: 8_000_000 + index,
+            sender: index % 2 === 0 ? 'char' : 'user',
+            text: `Long history message ${index + 1}`,
+            time: `09:${String(index % 60).padStart(2, '0')} AM`,
+            type: 'text' as const,
+          })),
+        },
+      }));
+    };
 
     return () => {
       delete scope.__NANA_SMOKE_SET_PAYMENT_STATE__;
       delete scope.__NANA_SMOKE_SET_CUSTOM_AVATAR__;
       delete scope.__NANA_SMOKE_SET_BUBBLE_VARIANT__;
       delete scope.__NANA_SMOKE_ADD_VOICE_SAMPLE__;
+      delete scope.__NANA_SMOKE_SEED_LONG_CHAT__;
       delete scope.__NANA_SMOKE_SET_LANGUAGE__;
     };
   }, [activeChatId]);
@@ -204,9 +225,9 @@ export function ChatView() {
     return undefined;
   }, [activeChatId, kbHeight, messageCount]);
 
-  const handleAvatarClick = () => {
+  const handleAvatarClick = useCallback(() => {
     useNanaStore.setState({ activeProfileId: activeChatId, weChatPage: 'profile' });
-  };
+  }, [activeChatId]);
 
   const notifyMemory = (description: string, status: 'memory' | 'processing' | 'success' | 'error' = 'memory') => {
     const character = activeChatId ? characters.find(item => item.id === activeChatId) : undefined;
@@ -256,6 +277,30 @@ export function ChatView() {
     }, 220);
   };
 
+  const renderMessage = useCallback(({ item: message, index }: { item: Message; index: number }) => (
+    <ChatMessageBubble
+      msg={message}
+      activeChatId={activeChatId}
+      characters={characters}
+      renderAvatar={renderAvatar}
+      myAvatar={myAvatar}
+      onRetry={() => void useNanaStore.getState().retryChatMessage(message.id)}
+      onAvatarClick={handleAvatarClick}
+      isGenerating={isGenerating}
+      showTime={shouldShowTimeSeparator(messages, index)}
+      bubbleVariant={bubbleVariant}
+    />
+  ), [
+    activeChatId,
+    bubbleVariant,
+    characters,
+    handleAvatarClick,
+    isGenerating,
+    messages,
+    myAvatar,
+    renderAvatar,
+  ]);
+
   return (
     <View
       style={{
@@ -269,8 +314,12 @@ export function ChatView() {
       {selectMode ? <SelectModeBar onForward={rememberSelectedMessages} /> : null}
 
       <View style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <ScrollView
+        <FlashList
+          key={activeChatId}
           ref={scrollRef}
+          data={messages}
+          keyExtractor={message => String(message.id)}
+          renderItem={renderMessage}
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           keyboardShouldPersistTaps="handled"
           onTouchStart={() => {
@@ -283,39 +332,25 @@ export function ChatView() {
             paddingTop: compact ? 3 : 7,
             paddingBottom: 12,
           }}
-          onContentSizeChange={() => {
-            if (!activeChatId) return;
-            const didInitialScroll = initialScrollChatId.current === activeChatId;
-            scrollRef.current?.scrollToEnd({ animated: didInitialScroll });
-            initialScrollChatId.current = activeChatId;
+          maintainVisibleContentPosition={{
+            startRenderingFromBottom: true,
+            autoscrollToBottomThreshold: 0.2,
+            animateAutoScrollToBottom: true,
           }}
-        >
-          <View style={{ paddingVertical: 2 }}>
-            {messages.map((message, index) => (
-              <ChatMessageBubble
-                key={message.id}
-                msg={message}
-                activeChatId={activeChatId}
-                characters={characters}
-                renderAvatar={renderAvatar}
-                myAvatar={myAvatar}
-                onRetry={() => void useNanaStore.getState().retryChatMessage(message.id)}
-                onAvatarClick={handleAvatarClick}
-                isGenerating={isGenerating}
-                showTime={shouldShowTimeSeparator(messages, index)}
-                bubbleVariant={bubbleVariant}
-              />
-            ))}
-            {isGenerating ? (
-              <TypingIndicator
-                activeChatId={activeChatId}
-                characters={characters}
-                renderAvatar={renderAvatar}
-                bubbleVariant={bubbleVariant}
-              />
-            ) : null}
-          </View>
-        </ScrollView>
+          onLoad={() => {
+            if (!activeChatId) return;
+            initialScrollChatId.current = activeChatId;
+            lastMessageCount.current = messageCount;
+          }}
+          ListFooterComponent={isGenerating ? (
+            <TypingIndicator
+              activeChatId={activeChatId}
+              characters={characters}
+              renderAvatar={renderAvatar}
+              bubbleVariant={bubbleVariant}
+            />
+          ) : null}
+        />
 
         {compact ? (
           <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, left: 0, height: 12 }}>

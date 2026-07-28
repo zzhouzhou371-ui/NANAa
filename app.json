@@ -80,7 +80,6 @@
         {
           "photosPermission": "Allow Nana to choose character portraits and photos you decide to share in your relationship.",
           "cameraPermission": "Allow Nana to take photos you choose to share in chat.",
-          "microphonePermission": false,
           "colors": {
             "cropBackgroundColor": "#F5EEE9",
             "cropToolbarColor": "#121A36",
@@ -106,7 +105,8 @@
           "locationWhenInUsePermission": "Allow Nana to use your approximate location to show local weather on the simulated phone."
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

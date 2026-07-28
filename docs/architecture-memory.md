@@ -24,12 +24,11 @@ memory, native media, or new app surfaces.
 `useNanaStore` is the app's main state boundary. It uses Zustand with
 AsyncStorage persistence.
 
-Persisted state includes:
+The Zustand root persists product configuration and relationship state, including:
 
 - User identity and API configuration.
 - Characters.
 - Friends.
-- Chat history.
 - Moments.
 - Theme config.
 - World-book entries.
@@ -37,6 +36,20 @@ Persisted state includes:
 - Memory settings and last forwarded message IDs.
 - Unread counts.
 - Call logs and relationship traces.
+
+Chat history remains available through `useNanaStore` as the current in-memory
+compatibility view, but native durability is owned by
+`src/repositories/chatMessageRepository.native.ts`. It stores one row per
+message in Expo SQLite with WAL enabled. On the first upgraded launch, legacy
+chat history is migrated from the old Zustand/AsyncStorage payload before that
+duplicated JSON field is removed. Web smoke tests use an isolated AsyncStorage
+repository with the same contract.
+
+`src/services/chatHistoryPersistence.ts` serializes store-to-database changes,
+surfaces write failures to export/reset operations, and lets import rollback
+restore both the root state and the message database. Portable Nana exports
+still include complete `chatHistory`, so this storage split is not visible to
+the user.
 
 Transient state includes:
 
@@ -188,6 +201,12 @@ it is not the scene save file.
 
 UI components should not assemble large prompts directly. They should pass
 structured state to service functions.
+
+The chat screen renders the in-memory message view with FlashList recycling
+instead of mounting every historical bubble in a ScrollView. Current AI reply
+generation still receives the compatible message array and applies its
+existing recent-message window, so the database migration does not change
+prompt behavior or memory evidence.
 
 Future AI extensions should be separated by intent:
 

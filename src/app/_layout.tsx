@@ -23,6 +23,10 @@ import {
   recoverPendingImagePickerSelection,
 } from '../services/nativeImagePickerRuntime';
 import { pruneUnreferencedAvatarFiles } from '../services/localMediaRepository';
+import {
+  hydrateDurableChatHistory,
+  startDurableChatHistoryPersistence,
+} from '../services/chatHistoryPersistence';
 import '../global.css';
 
 if (Platform.OS === 'web') {
@@ -58,6 +62,11 @@ export default function RootLayout() {
       if (!useNanaStore.persist.hasHydrated()) {
         throw new Error('Nana could not load the local data store.');
       }
+      const durableChatHistory = await hydrateDurableChatHistory(
+        useNanaStore.getState().chatHistory,
+      );
+      useNanaStore.setState({ chatHistory: durableChatHistory });
+      startDurableChatHistoryPersistence();
       useNanaStore.setState({ apiKey: secret.apiKey, tempApiKey: secret.apiKey });
       const recoveredSelection = await recoverPendingImagePickerSelection();
       if (recoveredSelection) {

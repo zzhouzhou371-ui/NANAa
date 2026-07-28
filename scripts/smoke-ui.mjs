@@ -23,6 +23,7 @@ const voiceOnly = args.has('--voice-only');
 const glassOnly = args.has('--glass-only');
 const bubbleAb = args.has('--bubble-ab');
 const bubbleStates = args.has('--bubble-states');
+const longChatOnly = args.has('--long-chat-only');
 const requestedLocale = localeArg?.split('=').slice(1).join('=');
 const smokeLocale = requestedLocale === 'zh' ? 'zh' : requestedLocale === 'en' ? 'en' : null;
 const browserChannelArg = process.argv.find(arg => arg.startsWith('--browser-channel='));
@@ -339,6 +340,28 @@ async function runViewport(browser, viewport) {
       } else {
         if (!glassOnly) await captureStep(page, result, 'chat-luna');
       }
+    }
+
+    if (longChatOnly) {
+      const seeded = await page.evaluate(() => {
+        const seed = globalThis.__NANA_SMOKE_SEED_LONG_CHAT__;
+        if (typeof seed !== 'function') return false;
+        seed(2_000);
+        return true;
+      });
+      if (!seeded) {
+        failStep(result, 'chat-long-2000: long-chat smoke hook is missing');
+      } else {
+        await page.waitForTimeout(1_500);
+        await captureStep(page, result, 'chat-long-2000');
+        const latestVisible = await page.getByText('Long history message 2000').isVisible().catch(() => false);
+        if (!latestVisible) failStep(result, 'chat-long-2000: newest message is not visible after seeding');
+        const mountedBubbleCount = await page.locator('[data-testid^="chat-bubble-"]').count();
+        if (mountedBubbleCount >= 200) {
+          failStep(result, `chat-long-2000: expected recycling, but ${mountedBubbleCount} bubbles are mounted`);
+        }
+      }
+      return result;
     }
 
     if (!glassOnly && await clickTestId(page, result, 'chat-voice-toggle-button')) {

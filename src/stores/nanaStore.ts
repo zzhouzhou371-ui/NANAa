@@ -455,7 +455,7 @@ export interface NanaStore {
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 5;
+export const NANA_PERSIST_VERSION = 6;
 
 type PersistedStateRecord = Record<string, unknown>;
 
@@ -557,7 +557,6 @@ export function selectNanaPersistedState(state: NanaStore): PersistedStateRecord
     friends: state.friends,
     characters: state.characters,
     savedAvatars: state.savedAvatars,
-    chatHistory: state.chatHistory,
     momentsList: state.momentsList,
     themeConfig: state.themeConfig,
     worldBookEntries: state.worldBookEntries,
@@ -2016,7 +2015,7 @@ export const useNanaStore = create<NanaStore>()(
               [chatId]: [
                 ...(s.chatHistory[chatId] || []),
                 {
-                  id: Date.now(),
+                  id: nextMessageId(),
                   sender: 'system',
                   text: recordText,
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

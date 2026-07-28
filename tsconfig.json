@@ -1,6 +1,7 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
+    "moduleSuffixes": [".native", ""],
     "strict": true,
     "paths": {
       "@/*": [

@@ -22,6 +22,11 @@ import {
   stageImportedAvatar,
 } from './localMediaRepository';
 import { hasNanaManagedAvatarPath, isPortableAvatarDataUri } from './avatarValueRuntime';
+import {
+  flushDurableChatHistory,
+  readDurableChatHistory,
+  replaceDurableChatHistory,
+} from './chatHistoryPersistence';
 
 const EXPORT_FORMAT = 'nana-export';
 const EXPORT_VERSION = 2;
@@ -545,6 +550,7 @@ async function restoreBackup(backup: readonly (readonly [string, string | null])
 
 export async function applyImportWithRollback(bundle: ParsedImportBundle): Promise<void> {
   const prepared = prepareAvatarMediaImport(bundle);
+  const durableChatBackup = await readDurableChatHistory();
   let succeeded = false;
   try {
     const keys = prepared.entries.map(([key]) => key);
@@ -555,10 +561,14 @@ export async function applyImportWithRollback(bundle: ParsedImportBundle): Promi
       if (!useNanaStore.persist.hasHydrated()) {
         throw new Error('The imported state could not be hydrated.');
       }
+      await replaceDurableChatHistory(useNanaStore.getState().chatHistory);
+      await flushDurableChatHistory();
     } catch (error) {
       try {
         await restoreBackup(backup);
         await useNanaStore.persist.rehydrate();
+        await replaceDurableChatHistory(durableChatBackup);
+        useNanaStore.setState({ chatHistory: durableChatBackup });
       } catch {
         throw new Error('Import failed and Nana could not restore the previous local backup. Restart the app before making more changes.');
       }
@@ -581,6 +591,7 @@ export async function applyImportWithRollback(bundle: ParsedImportBundle): Promi
 
 export async function exportData(): Promise<void> {
   try {
+    const durableChatHistory = await readDurableChatHistory();
     const allKeys = await AsyncStorage.getAllKeys();
     const nanaKeys = Array.from(new Set([
       NANA_ROOT_STORAGE_KEY,
@@ -598,6 +609,17 @@ export async function exportData(): Promise<void> {
         version: NANA_PERSIST_VERSION,
       };
     }
+    const rootValue = storedValues[NANA_ROOT_STORAGE_KEY];
+    if (!isRecord(rootValue) || !isRecord(rootValue.state)) {
+      throw new Error('Nana could not prepare the local state for export.');
+    }
+    storedValues[NANA_ROOT_STORAGE_KEY] = {
+      ...rootValue,
+      state: {
+        ...rootValue.state,
+        chatHistory: durableChatHistory,
+      },
+    };
 
     const avatarMedia = await createAvatarMediaManifest(storedValues);
     const document = createExportDocument(storedValues, new Date().toISOString(), avatarMedia);
@@ -637,5 +659,7 @@ export async function clearAllData(): Promise<void> {
   clearPersistedMedia();
 
   const initialState = useNanaStore.getInitialState();
+  await replaceDurableChatHistory(initialState.chatHistory);
   useNanaStore.setState(initialState, true);
+  await flushDurableChatHistory();
 }

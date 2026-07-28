@@ -64,6 +64,7 @@ const promotedAvatarUris = [];
 const deletedStagedAvatarUris = [];
 const deletedFinalAvatarUris = [];
 let reconcileCount = 0;
+let durableChatHistory = {};
 const avatarBytes = Buffer.from('avatar-contract-bytes');
 const avatarBase64 = avatarBytes.toString('base64');
 const localMediaRepositoryMock = {
@@ -94,7 +95,8 @@ const storage = loadTypeScriptModule('src/services/storage.ts', {
   '@react-native-async-storage/async-storage': asyncStorageMock,
   'react-native': { Alert: { alert() {} }, Share: { share: async () => undefined } },
   '../stores/nanaStore': {
-    NANA_PERSIST_VERSION: 2,
+    NANA_PERSIST_VERSION: 6,
+    selectNanaPersistedState: state => state,
     useNanaStore: {
       setState() {},
       getState() {
@@ -120,6 +122,11 @@ const storage = loadTypeScriptModule('src/services/storage.ts', {
         && normalized.includes('/nana-media/avatars/');
     },
     isPortableAvatarDataUri: value => /^data:image\/(?:jpeg|jpg|png|webp);base64,[a-z0-9+/]+={0,2}$/i.test(value),
+  },
+  './chatHistoryPersistence': {
+    flushDurableChatHistory: async () => undefined,
+    readDurableChatHistory: async () => durableChatHistory,
+    replaceDurableChatHistory: async history => { durableChatHistory = history; },
   },
 });
 
