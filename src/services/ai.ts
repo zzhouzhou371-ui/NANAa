@@ -203,6 +203,16 @@ export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' 
   }
 
   appendSection(sections, "Author's Note", finalAuthorsNote);
+  appendSection(
+    sections,
+    'Online Message Format',
+    [
+      'Reply as natural chat messages, not as an essay.',
+      'Return one message bubble most of the time. When it feels conversational, you may return two or three short bubbles.',
+      'Separate multiple bubbles with the exact token <NANA_MSG> and do not number them.',
+      'Never return more than three bubbles.',
+    ].join('\n'),
+  );
 
   const matchedLore = worldBookEntries
     .filter(entry => {

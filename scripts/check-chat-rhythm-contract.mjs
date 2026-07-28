@@ -22,9 +22,16 @@ const sandbox = vm.createContext({
 vm.runInContext(compiled.outputText, sandbox, { filename: sourcePath });
 
 const {
+  appendUserMessageToBurst,
+  beginUserMessageBurst,
+  cancelUserMessageBurst,
+  characterFollowUpDelayMs,
+  collectUserMessageBurst,
   generateLocalSandboxReply,
+  isCollectingUserMessageBurst,
   planChatReply,
   resolveChatPresence,
+  splitCharacterReplyIntoMessages,
 } = module.exports;
 const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
@@ -64,6 +71,38 @@ const enQuestion = generateLocalSandboxReply({ characterName: 'Luna', userText: 
 expect(zhGreeting.includes('我在'), 'Chinese sandbox greeting must be localized');
 expect(!zhGreeting.includes('API'), 'sandbox replies must not expose implementation copy');
 expect(/[A-Za-z]/.test(enQuestion) && !enQuestion.includes('API'), 'English sandbox question must be natural and localized');
+expect(splitCharacterReplyIntoMessages(zhGreeting).length === 2, 'sandbox greetings should exercise consecutive character bubbles');
+
+const explicitBubbles = splitCharacterReplyIntoMessages('First.<NANA_MSG>Second.<NANA_MSG>Third.');
+expect(explicitBubbles.length === 3 && explicitBubbles[1] === 'Second.', 'explicit bubble separators must preserve ordered messages');
+const overflowBubbles = splitCharacterReplyIntoMessages('1|||2|||3|||4|||5');
+expect(overflowBubbles.length === 3 && overflowBubbles[2] === '3 4 5', 'bubble overflow must merge safely into the final message');
+const paragraphBubbles = splitCharacterReplyIntoMessages('One thought.\n\nAnother thought.');
+expect(paragraphBubbles.length === 2, 'blank-line model output should become separate messages');
+const shortReply = splitCharacterReplyIntoMessages('One short reply.');
+expect(shortReply.length === 1, 'short replies should remain one bubble');
+
+const followUpDelay = characterFollowUpDelayMs({
+  characterId: 'luna-id',
+  messageText: 'One more thing.',
+  messageIndex: 1,
+});
+expect(followUpDelay >= 350 && followUpDelay <= 1_800, 'follow-up bubbles need a bounded conversational pause');
+expect(characterFollowUpDelayMs({
+  characterId: 'luna-id',
+  messageText: 'One more thing.',
+  messageIndex: 1,
+  fast: true,
+}) === 0, 'fast test mode must skip follow-up pauses');
+
+beginUserMessageBurst('luna-id', 'burst-1', { sourceMessageId: 101, text: 'First' }, 1_000);
+expect(isCollectingUserMessageBurst('luna-id', 'burst-1'), 'a new user burst must accept consecutive text messages');
+expect(appendUserMessageToBurst('luna-id', 'burst-1', { sourceMessageId: 102, text: 'Second' }, 1_200), 'a matching burst must accept the second message');
+expect(!appendUserMessageToBurst('luna-id', 'stale-burst', { sourceMessageId: 103, text: 'Wrong turn' }, 1_300), 'a stale request must not join the burst');
+const collectedBurst = await collectUserMessageBurst({ chatId: 'luna-id', requestId: 'burst-1', fast: true });
+expect(collectedBurst?.map(item => item.text).join('|') === 'First|Second', 'burst collection must preserve user message order');
+expect(!isCollectingUserMessageBurst('luna-id', 'burst-1'), 'a collected burst must close before generation starts');
+cancelUserMessageBurst('luna-id', 'burst-1');
 
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
 const sendChatStart = storeSource.indexOf('sendChatMessage: async');
@@ -73,7 +112,21 @@ expect(sendChatSource.includes('planChatReply({'), 'chat sends must create a del
 expect(sendChatSource.includes('await waitForChatReplyPlan(replyPlan)'), 'chat sends must respect the planned delivery window');
 expect(sendChatSource.includes("hasRemoteApiKey ? 'remote' : 'localSandbox'"), 'chat messages must record their generation source');
 expect(sendChatSource.includes('generateLocalSandboxReply({'), 'no-key simulator chat must use the local adapter');
+expect(sendChatSource.includes('isCollectingUserMessageBurst(chatId, pendingRequestId)'), 'a pending collecting turn must accept consecutive user text');
+expect(sendChatSource.includes('appendUserMessageToBurst(chatId, pendingRequestId'), 'joined user messages must enter the active burst');
+expect(sendChatSource.includes('await collectUserMessageBurst({'), 'generation must wait for the user burst quiet window');
+expect(sendChatSource.includes("burstItems.map(item => item.text).join('\\n')"), 'the model must receive the full ordered user burst');
+expect(sendChatSource.includes('splitCharacterReplyIntoMessages(rawReplyText)'), 'generated text must become one to three message bubbles');
+expect(sendChatSource.includes('for (const [messageIndex, messageText] of deliveryMessages.entries())'), 'character bubbles must be committed in delivery order');
+expect(sendChatSource.includes('await waitForCharacterFollowUp({'), 'consecutive character bubbles must have a conversational pause');
+expect(sendChatSource.includes('isCurrentChatRequest(s.pendingChatRequests, chatId, requestId)'), 'every bubble commit must remain guarded by the request token');
 expect(!sendChatSource.includes('if (!state.apiKey)'), 'no-key simulator chat must not short-circuit into an error message');
+const clearChatStart = storeSource.indexOf('clearChat: (chatId) =>');
+const clearChatEnd = storeSource.indexOf('correctRelationshipMemory:', clearChatStart);
+expect(storeSource.slice(clearChatStart, clearChatEnd).includes('cancelUserMessageBurst(chatId)'), 'clearing chat must cancel its active burst window');
+const aiSource = readFileSync(resolve(root, 'src/services/ai.ts'), 'utf8');
+expect(aiSource.includes("'Online Message Format'"), 'AI context must declare the multi-bubble response contract');
+expect(aiSource.includes('Separate multiple bubbles with the exact token <NANA_MSG>'), 'remote providers must receive the exact bubble separator');
 
 if (errors.length > 0) {
   console.error('Chat rhythm contract check failed:');

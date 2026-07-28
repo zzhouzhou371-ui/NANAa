@@ -219,6 +219,20 @@ unread-count path in an emulator. Every character reply records whether it came
 from the remote model, local sandbox, or a future proactive event. Sandbox text
 is test data, not a replacement for production character generation.
 
+Online turns support bursts in both directions:
+
+- Consecutive user text sent inside a short quiet window is collected in order
+  and passed to the model as one turn. Voice and other media remain explicit
+  single events.
+- A character reply may contain one to three bubbles separated by
+  `<NANA_MSG>`. Paragraph and long-sentence fallbacks safely normalize providers
+  that ignore the explicit format.
+- Character bubbles are committed one at a time with bounded pauses. The
+  request token remains active until the final bubble, so clearing a chat or
+  invalidating a request cancels the rest of the sequence.
+- Voice replies intentionally collapse the generated bubbles back into one
+  spoken message.
+
 Future AI extensions should be separated by intent:
 
 - Reply generation.

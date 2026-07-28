@@ -126,6 +126,11 @@ baked interaction layers.
   sandbox reply through the same request and persistence path, allowing Android
   emulator testing without sending conversations to a model provider. Stored
   character messages record their generation source for later diagnostics.
+- Online text now behaves as conversational bursts. Several user messages sent
+  within the short collection window become one ordered model turn. Character
+  output can produce one to three independent bubbles, delivered sequentially
+  with request-token cancellation preserved through the final bubble. Voice
+  remains one coherent message.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
@@ -171,7 +176,10 @@ baked interaction layers.
 - The 2026-07-28 online-chat rhythm pass completed TypeScript, ESLint, text,
   storage, chat-storage, chat-request, and chat-rhythm contracts. The local
   simulator path is deterministic under the fast-chat test flag and remote
-  generation remains selected whenever a non-blank API key is present.
+  generation remains selected whenever a non-blank API key is present. The
+  subsequent bidirectional-burst pass also completed the full 360x800 chat,
+  voice, payment, avatar, and call UI smoke path at
+  `screenshots/smoke-chat-bursts/report.json`.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -219,19 +227,17 @@ have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Extend the online-chat rhythm layer with burst-message batching, so a user
-   can send several short messages while the character is preparing one reply.
-2. Add durable proactive-event scheduling and unread notifications without
+1. Add durable proactive-event scheduling and unread notifications without
    requiring the app to remain open.
-3. Add explicit delivery/read state and retry semantics for outgoing messages.
-4. Run the current SQLite migration, high-volume chat, and model-backed rhythm
+2. Add explicit delivery/read state and retry semantics for outgoing messages.
+3. Run the current SQLite migration, high-volume chat, and model-backed rhythm
    checks together on a physical Android device when the next test APK is
    intentionally prepared.
-5. Continue the online memory vertical slice with canonical fact extraction
+4. Continue the online memory vertical slice with canonical fact extraction
    and deterministic recall scoring after sustained real-model conversations
    provide test data.
-6. Establish Apple signing/device access and run the same physical-device
+5. Establish Apple signing/device access and run the same physical-device
    matrix on iOS.
-7. Build offline meeting later as a standalone simulated-phone app with its own
+6. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

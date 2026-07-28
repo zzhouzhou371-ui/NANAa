@@ -27,8 +27,15 @@ import {
   isCurrentChatRequest,
 } from '../services/chatRequestCoordinator';
 import {
+  appendUserMessageToBurst,
+  beginUserMessageBurst,
+  cancelUserMessageBurst,
+  collectUserMessageBurst,
   generateLocalSandboxReply,
+  isCollectingUserMessageBurst,
   planChatReply,
+  splitCharacterReplyIntoMessages,
+  waitForCharacterFollowUp,
   waitForChatReplyPlan,
   type ChatGenerationSource,
 } from '../services/chatRhythmRuntime';
@@ -926,6 +933,7 @@ export const useNanaStore = create<NanaStore>()(
 
       clearChat: (chatId) => {
         if (!chatId) return;
+        cancelUserMessageBurst(chatId);
         set(state => {
           const visiblePayments = Object.values(state.paymentsById)
             .filter(payment => payment.chatId === chatId && paymentMustRemainVisibleDuringChatClear(payment))
@@ -1471,7 +1479,11 @@ export const useNanaStore = create<NanaStore>()(
           discardVoiceCapture(mediaCapture);
           return;
         }
-        if ((type === 'text' || type === 'voice') && state.pendingChatRequests[chatId]) {
+        const pendingRequestId = state.pendingChatRequests[chatId];
+        const joiningUserBurst = type === 'text'
+          && !!pendingRequestId
+          && isCollectingUserMessageBurst(chatId, pendingRequestId);
+        if ((type === 'text' || type === 'voice') && pendingRequestId && !joiningUserBurst) {
           if (type === 'voice') discardVoiceCapture(mediaCapture);
           set({
             islandNotification: {
@@ -1592,13 +1604,21 @@ export const useNanaStore = create<NanaStore>()(
                 ...s.chatHistory,
                 [chatId]: [...(s.chatHistory[chatId] || []), newMsg],
               },
-          relationshipTraces: options?.skipUserAppend
+          relationshipTraces: options?.skipUserAppend || joiningUserBurst
             ? s.relationshipTraces
             : upsertRelationshipTrace(s.relationshipTraces, initialTrace),
           ...(type === 'text' || type === 'voice'
             ? { chatInput: '', chatPanel: 'none' as ChatPanel }
             : { chatPanel: 'none' as ChatPanel }),
         }));
+
+        if (joiningUserBurst && pendingRequestId) {
+          appendUserMessageToBurst(chatId, pendingRequestId, {
+            sourceMessageId,
+            text: userText,
+          });
+          return;
+        }
 
         const sourceMessageStillExists = () => (
           (get().chatHistory[chatId] || []).some(message => message.id === sourceMessageId)
@@ -1693,12 +1713,14 @@ export const useNanaStore = create<NanaStore>()(
 
         const requestId = `reply:${chatId}:${sourceMessageId}:${Date.now()}`;
         const hasRemoteApiKey = state.apiKey.trim().length > 0;
-        const replyPlan = planChatReply({
-          characterId: chatId,
-          userText,
-          fast: process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1',
-        });
         const generationSource: ChatGenerationSource = hasRemoteApiKey ? 'remote' : 'localSandbox';
+        const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
+        if (type === 'text') {
+          beginUserMessageBurst(chatId, requestId, {
+            sourceMessageId,
+            text: userText,
+          });
+        }
         set(s => ({
           pendingChatRequests: beginChatRequest(s.pendingChatRequests, chatId, requestId).pending,
           islandNotification: { title: activeChar?.name || 'AI', desc: copy.typing, icon: activeChar?.avatar, status: 'typing' },
@@ -1706,6 +1728,21 @@ export const useNanaStore = create<NanaStore>()(
         }));
 
         try {
+          if (type === 'text') {
+            const burstItems = await collectUserMessageBurst({
+              chatId,
+              requestId,
+              fast: fastChat,
+            });
+            if (!burstItems || !isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
+            cancelUserMessageBurst(chatId, requestId);
+            userText = burstItems.map(item => item.text).join('\n');
+          }
+          const replyPlan = planChatReply({
+            characterId: chatId,
+            userText,
+            fast: fastChat,
+          });
           const activePreset = state.onlinePresets.find(p => p.id === state.activeOnlinePresetId) || DEFAULT_ONLINE_PRESET;
           const generatedReply = hasRemoteApiKey
             ? await generateReply({
@@ -1726,20 +1763,25 @@ export const useNanaStore = create<NanaStore>()(
                 }),
                 loreCount: 0,
               };
-          const { text: replyText, loreCount } = generatedReply;
+          const { text: rawReplyText, loreCount } = generatedReply;
+          const parsedReplyMessages = splitCharacterReplyIntoMessages(rawReplyText);
+          const replyMessages = parsedReplyMessages.length > 0
+            ? parsedReplyMessages
+            : [rawReplyText.trim() || (copy.language === 'zh' ? '我在。' : "I'm here.")];
+          const normalizedReplyText = replyMessages.join(' ');
           await waitForChatReplyPlan(replyPlan);
           if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
 
-          const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const charReplyMode = characterReplyMode(activeChar);
           const replyType = resolveCharacterReplyType(activeChar, charReplyMode, type);
+          const deliveryMessages = replyType === 'voice' ? [normalizedReplyText] : replyMessages;
           let charVoiceDraft = replyType === 'voice'
-            ? createCharacterVoiceReplyDraft(activeChar, replyText, charReplyMode)
+            ? createCharacterVoiceReplyDraft(activeChar, normalizedReplyText, charReplyMode)
             : null;
 
           if (replyType === 'voice') {
             const speechAudio = await synthesizeSpeechAudio({
-              text: replyText,
+              text: normalizedReplyText,
               apiUrl: state.apiUrl,
               apiKey: state.apiKey,
               voiceProfileId: activeChar?.voiceProfileId,
@@ -1748,7 +1790,7 @@ export const useNanaStore = create<NanaStore>()(
             if (speechAudio.phase === 'ready' && speechAudio.localUri) {
               charVoiceDraft = createVoiceMessageDraftFromCapture(
                 resolveSpeechToTextResult({
-                  transcript: replyText,
+                  transcript: normalizedReplyText,
                   localUri: speechAudio.localUri,
                   durationSec: speechAudio.durationSec,
                 }),
@@ -1758,56 +1800,82 @@ export const useNanaStore = create<NanaStore>()(
             } else if (state.autoTTS || type === 'voice') {
               void speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
                 character: activeChar,
-                text: replyText,
+                text: normalizedReplyText,
                 language: state.speechLanguage || 'zh-CN',
               }));
             }
           }
 
-          let didCommit = false;
-          set(s => {
-            const completion = completeChatRequest(s.pendingChatRequests, chatId, requestId);
-            if (!completion.completed) return {};
-            const nextPending = completion.pending;
-            didCommit = true;
-            return {
-              islandNotification: null,
-              isGenerating: Object.keys(nextPending).length > 0,
-              pendingChatRequests: nextPending,
-              lastLoreCount: loreCount,
-              chatHistory: {
-                ...s.chatHistory,
-                [chatId]: [...(s.chatHistory[chatId] || []), {
-                  id: nextMessageId(), sender: 'char', text: replyText, time: replyTime,
-                  generationSource,
-                  ...(charVoiceDraft
-                    ? {
-                        type: 'voice' as MessageType,
-                        audioUri: charVoiceDraft.audioUri,
-                        audioDurationSec: charVoiceDraft.audioDurationSec,
-                        transcript: charVoiceDraft.transcript,
-                        replyMode: charVoiceDraft.replyMode,
-                      }
-                    : {}),
-                }],
-              },
-              relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
+          let didCommitAll = false;
+          for (const [messageIndex, messageText] of deliveryMessages.entries()) {
+            if (messageIndex > 0) {
+              await waitForCharacterFollowUp({
                 characterId: chatId,
-                source: traceSource,
-                sourceEventId: String(sourceMessageId),
-                title: traceTitle,
-                summary: `${traceUserName}: ${userText} / ${traceCharacterName}: ${replyText}`,
-                mediaUris: finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
-                recallWeight: type === 'voice' ? 0.7 : 0.5,
-                state: 'digested',
-              })),
-              unreadCounts: {
-                ...s.unreadCounts,
-                [chatId]: unreadAfterRemoteEvent(s, chatId),
-              },
-            };
-          });
-          if (!didCommit) return;
+                messageText,
+                messageIndex,
+                fast: fastChat,
+              });
+            }
+            if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
+
+            const isLastMessage = messageIndex === deliveryMessages.length - 1;
+            let didCommitMessage = false;
+            set(s => {
+              if (!isCurrentChatRequest(s.pendingChatRequests, chatId, requestId)) return {};
+              const completion = isLastMessage
+                ? completeChatRequest(s.pendingChatRequests, chatId, requestId)
+                : { completed: true, pending: s.pendingChatRequests };
+              if (!completion.completed) return {};
+              const nextPending = completion.pending;
+              const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              didCommitMessage = true;
+              if (isLastMessage) didCommitAll = true;
+              return {
+                ...(isLastMessage ? {
+                  islandNotification: null,
+                  isGenerating: Object.keys(nextPending).length > 0,
+                  pendingChatRequests: nextPending,
+                  lastLoreCount: loreCount,
+                  relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
+                    characterId: chatId,
+                    source: traceSource,
+                    sourceEventId: String(sourceMessageId),
+                    title: traceTitle,
+                    summary: `${traceUserName}: ${userText} / ${traceCharacterName}: ${normalizedReplyText}`,
+                    mediaUris: finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
+                    recallWeight: type === 'voice' ? 0.7 : 0.5,
+                    state: 'digested',
+                  })),
+                } : {}),
+                chatHistory: {
+                  ...s.chatHistory,
+                  [chatId]: [...(s.chatHistory[chatId] || []), {
+                    id: nextMessageId(),
+                    sender: 'char',
+                    text: messageText,
+                    time: replyTime,
+                    generationSource,
+                    ...(charVoiceDraft && messageIndex === 0
+                      ? {
+                          type: 'voice' as MessageType,
+                          audioUri: charVoiceDraft.audioUri,
+                          audioDurationSec: charVoiceDraft.audioDurationSec,
+                          transcript: charVoiceDraft.transcript,
+                          replyMode: charVoiceDraft.replyMode,
+                        }
+                      : {}),
+                  }],
+                },
+                unreadCounts: {
+                  ...s.unreadCounts,
+                  [chatId]: unreadAfterRemoteEvent(s, chatId),
+                },
+              };
+            });
+            if (!didCommitMessage) return;
+            if (!isLastMessage) triggerHaptic('light');
+          }
+          if (!didCommitAll) return;
           triggerHaptic('medium');
           set({
             islandNotification: {
@@ -1819,6 +1887,7 @@ export const useNanaStore = create<NanaStore>()(
           });
           setTimeout(() => set({ islandNotification: null }), 3000);
         } catch (error) {
+          cancelUserMessageBurst(chatId, requestId);
           console.error(error);
           const failureMessage = error instanceof Error ? error.message : copy.apiCallFailed;
           let didCommit = false;

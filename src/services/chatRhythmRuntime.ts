@@ -21,6 +21,38 @@ interface LocalSandboxReplyInput {
   language?: string;
 }
 
+interface CharacterFollowUpDelayInput {
+  characterId: string;
+  messageText: string;
+  messageIndex: number;
+  fast?: boolean;
+}
+
+export interface UserMessageBurstItem {
+  sourceMessageId: number;
+  text: string;
+}
+
+interface UserMessageBurst {
+  chatId: string;
+  requestId: string;
+  startedAt: number;
+  updatedAt: number;
+  collecting: boolean;
+  items: UserMessageBurstItem[];
+}
+
+interface CollectUserMessageBurstInput {
+  chatId: string;
+  requestId: string;
+  quietWindowMs?: number;
+  maxWindowMs?: number;
+  fast?: boolean;
+}
+
+export const CHAT_BUBBLE_SEPARATOR = '<NANA_MSG>';
+const userMessageBursts = new Map<string, UserMessageBurst>();
+
 const stableHash = (value: string) => {
   let hash = 2_166_136_261;
   for (const char of value) {
@@ -91,6 +123,148 @@ export const waitForChatReplyPlan = async (
   await new Promise<void>(resolve => setTimeout(resolve, remaining));
 };
 
+const mergeOverflowMessages = (messages: string[], maxMessages: number) => {
+  if (messages.length <= maxMessages) return messages;
+  return [
+    ...messages.slice(0, maxMessages - 1),
+    messages.slice(maxMessages - 1).join(' '),
+  ];
+};
+
+const sentenceSegments = (value: string) => (
+  value
+    .match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/gu)
+    ?.map(segment => segment.trim())
+    .filter(Boolean)
+  || []
+);
+
+export const splitCharacterReplyIntoMessages = (
+  value: string,
+  maxMessages = 3,
+): string[] => {
+  const normalized = value
+    .replace(/^```(?:text|markdown)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  if (!normalized) return [];
+
+  const explicitSegments = normalized
+    .split(/\s*(?:<NANA_MSG>|\|\|\|)\s*/i)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+  if (explicitSegments.length > 1) {
+    return mergeOverflowMessages(explicitSegments, maxMessages);
+  }
+
+  const paragraphSegments = normalized
+    .split(/\n{2,}/)
+    .map(segment => segment.replace(/\s*\n\s*/g, ' ').trim())
+    .filter(Boolean);
+  if (paragraphSegments.length > 1) {
+    return mergeOverflowMessages(paragraphSegments, maxMessages);
+  }
+
+  const chars = Array.from(normalized);
+  const looksMostlyCjk = /[\u3400-\u9fff]/u.test(normalized);
+  const longReplyThreshold = looksMostlyCjk ? 72 : 150;
+  if (chars.length < longReplyThreshold) return [normalized];
+
+  const sentences = sentenceSegments(normalized);
+  if (sentences.length < 2) return [normalized];
+  return mergeOverflowMessages(sentences, maxMessages);
+};
+
+export const characterFollowUpDelayMs = ({
+  characterId,
+  messageText,
+  messageIndex,
+  fast = false,
+}: CharacterFollowUpDelayInput): number => {
+  if (fast) return 0;
+  const readingBeat = Math.min(800, Array.from(messageText).length * 18);
+  const jitter = stableHash(`${characterId}:${messageIndex}:${messageText}`) % 650;
+  return 350 + readingBeat + jitter;
+};
+
+export const waitForCharacterFollowUp = async (
+  input: CharacterFollowUpDelayInput,
+): Promise<void> => {
+  const delayMs = characterFollowUpDelayMs(input);
+  if (delayMs === 0) return;
+  await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+};
+
+export const beginUserMessageBurst = (
+  chatId: string,
+  requestId: string,
+  item: UserMessageBurstItem,
+  now = Date.now(),
+): void => {
+  userMessageBursts.set(chatId, {
+    chatId,
+    requestId,
+    startedAt: now,
+    updatedAt: now,
+    collecting: true,
+    items: [item],
+  });
+};
+
+export const isCollectingUserMessageBurst = (
+  chatId: string,
+  requestId?: string,
+): boolean => {
+  const burst = userMessageBursts.get(chatId);
+  return !!burst?.collecting && (!requestId || burst.requestId === requestId);
+};
+
+export const appendUserMessageToBurst = (
+  chatId: string,
+  requestId: string,
+  item: UserMessageBurstItem,
+  now = Date.now(),
+): boolean => {
+  const burst = userMessageBursts.get(chatId);
+  if (!burst?.collecting || burst.requestId !== requestId) return false;
+  if (burst.items.some(existing => existing.sourceMessageId === item.sourceMessageId)) return true;
+  burst.items.push(item);
+  burst.updatedAt = now;
+  return true;
+};
+
+export const collectUserMessageBurst = async ({
+  chatId,
+  requestId,
+  quietWindowMs = 900,
+  maxWindowMs = 2_800,
+  fast = false,
+}: CollectUserMessageBurstInput): Promise<UserMessageBurstItem[] | null> => {
+  while (true) {
+    const burst = userMessageBursts.get(chatId);
+    if (!burst || burst.requestId !== requestId) return null;
+    const now = Date.now();
+    const quietFor = now - burst.updatedAt;
+    const openFor = now - burst.startedAt;
+    if (fast || quietFor >= quietWindowMs || openFor >= maxWindowMs) {
+      burst.collecting = false;
+      return burst.items.map(item => ({ ...item }));
+    }
+    const untilQuiet = quietWindowMs - quietFor;
+    const untilForcedClose = maxWindowMs - openFor;
+    await new Promise<void>(resolve => setTimeout(resolve, Math.max(1, Math.min(untilQuiet, untilForcedClose))));
+  }
+};
+
+export const cancelUserMessageBurst = (
+  chatId: string,
+  requestId?: string,
+): void => {
+  const burst = userMessageBursts.get(chatId);
+  if (!burst || (requestId && burst.requestId !== requestId)) return;
+  userMessageBursts.delete(chatId);
+};
+
 const conciseExcerpt = (value: string, maxLength: number) => {
   const normalized = value.replace(/\s+/g, ' ').trim();
   const chars = Array.from(normalized);
@@ -113,7 +287,9 @@ export const generateLocalSandboxReply = ({
   const variant = stableHash(`${name || 'character'}:${normalized}`) % 3;
 
   if (isChinese) {
-    if (greeting) return name ? `我在。${name}刚刚还在想，你会不会来找我。` : '我在。刚刚还在想，你会不会来找我。';
+    if (greeting) return name
+      ? `我在。${CHAT_BUBBLE_SEPARATOR}${name}刚刚还在想，你会不会来找我。`
+      : `我在。${CHAT_BUBBLE_SEPARATOR}刚刚还在想，你会不会来找我。`;
     if (question) {
       return [
         '我有在认真想。你先告诉我，为什么会突然问这个？',
@@ -128,7 +304,9 @@ export const generateLocalSandboxReply = ({
     ][variant];
   }
 
-  if (greeting) return name ? `I'm here. ${name} was wondering when you'd come find me.` : "I'm here. I was wondering when you'd come find me.";
+  if (greeting) return name
+    ? `I'm here.${CHAT_BUBBLE_SEPARATOR}${name} was wondering when you'd come find me.`
+    : `I'm here.${CHAT_BUBBLE_SEPARATOR}I was wondering when you'd come find me.`;
   if (question) {
     return [
       'I am thinking about it seriously. Tell me what made you ask first?',
