@@ -32,6 +32,7 @@
     "test:memory-correction": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-memory-correction-contract.mjs",
     "test:chat": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-request-contract.mjs",
     "test:chat-rhythm": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-rhythm-contract.mjs",
+    "test:proactive-chat": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-proactive-chat-contract.mjs",
     "test:chat-storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-storage-contract.mjs",
     "test:storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-storage-contract.mjs",
     "test:glass": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-glass-material-contract.mjs",

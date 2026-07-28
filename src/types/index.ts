@@ -66,6 +66,16 @@ export interface Message {
 
 export type ChatHistory = Record<string, Message[]>;
 
+export interface ProactiveChatSchedule {
+  characterId: string;
+  lastInteractionAt: number;
+  nextDueAt: number;
+  lastSentAt?: number;
+  lastReason?: 'quietReconnect';
+}
+
+export type ProactiveChatSchedules = Record<string, ProactiveChatSchedule>;
+
 export interface Character {
   id: string;
   name: string;

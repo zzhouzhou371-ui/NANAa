@@ -131,6 +131,14 @@ baked interaction layers.
   output can produce one to three independent bubbles, delivered sequentially
   with request-token cancellation preserved through the final bubble. Voice
   remains one coherent message.
+- Online characters now have durable proactive-message schedules. First launch
+  only initializes a future due time; chat activity postpones it, successful
+  outreach enters a longer per-character cooldown, and a global cooldown stops
+  multiple characters from messaging together. Startup, foreground return,
+  and long foreground sessions check one eligible friend while respecting
+  blocked users, resting presence, calls, and in-flight replies. Proactive
+  bubbles use normal durable history and unread behavior but do not become
+  relationship memory until the user creates a real response event.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
@@ -155,7 +163,8 @@ baked interaction layers.
 - Contracts: `test:text`, `test:media`, `test:voice-gesture`,
   `test:call-audio-route`, `test:call-voice-activity`, `test:payment`,
   `test:storage`, `test:chat-storage`, `test:trace`, `test:memory-context`,
-  `test:memory-correction`, and `test:chat`.
+  `test:memory-correction`, `test:chat`, `test:chat-rhythm`, and
+  `test:proactive-chat`.
 - UI smoke: four viewports (390x844, 412x915, 360x800, 320x568), seven core
   screens per viewport, screenshots plus console/page-error and overflow checks.
   The pre-UI-polish regression baseline generated on 2026-07-16 is in
@@ -180,6 +189,12 @@ baked interaction layers.
   subsequent bidirectional-burst pass also completed the full 360x800 chat,
   voice, payment, avatar, and call UI smoke path at
   `screenshots/smoke-chat-bursts/report.json`.
+- The subsequent proactive-chat pass added a dedicated scheduler contract for
+  initialization, migration, interaction and send cooldowns, global
+  anti-burst limiting, eligibility, localized copy, lifecycle checks, unread
+  delivery, and the rule that unanswered outreach writes no memory trace. The
+  full 360x800 chat, voice, payment, avatar, and call UI smoke path passes at
+  `screenshots/smoke-proactive-chat/report.json`.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -227,17 +242,19 @@ have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Add durable proactive-event scheduling and unread notifications without
-   requiring the app to remain open.
-2. Add explicit delivery/read state and retry semantics for outgoing messages.
-3. Run the current SQLite migration, high-volume chat, and model-backed rhythm
+1. Add physical-device system notifications for due proactive events while the
+   app is closed, preserving the current durable cooldown and eligibility rules.
+2. Add model-personalized proactive copy behind an explicit cost/network
+   policy; retain the deterministic local adapter for emulator regression.
+3. Add explicit delivery/read state and retry semantics for outgoing messages.
+4. Run the current SQLite migration, high-volume chat, and model-backed rhythm
    checks together on a physical Android device when the next test APK is
    intentionally prepared.
-4. Continue the online memory vertical slice with canonical fact extraction
+5. Continue the online memory vertical slice with canonical fact extraction
    and deterministic recall scoring after sustained real-model conversations
    provide test data.
-5. Establish Apple signing/device access and run the same physical-device
+6. Establish Apple signing/device access and run the same physical-device
    matrix on iOS.
-6. Build offline meeting later as a standalone simulated-phone app with its own
+7. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

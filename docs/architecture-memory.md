@@ -233,6 +233,27 @@ Online turns support bursts in both directions:
 - Voice replies intentionally collapse the generated bubbles back into one
   spoken message.
 
+Proactive online outreach is a durable relationship rhythm, not an unbounded
+background loop:
+
+- Each friend receives a persisted next-due schedule. A new or migrated
+  install initializes the schedule without sending immediately.
+- Real chat activity postpones outreach by 6-10 hours. A delivered proactive
+  message enters an 18-30 hour per-character cooldown, while a four-hour global
+  cooldown prevents several characters from arriving as a burst.
+- Startup, foreground return, and a lightweight foreground heartbeat check at
+  most one eligible character. Blocked/non-friend characters, resting
+  characters, active calls, and in-flight chat replies are excluded.
+- The first adapter uses localized deterministic copy and the same one-to-three
+  bubble, durable-history, active-chat, and unread paths as ordinary character
+  messages. Its generation source is recorded as `proactive`.
+- An unanswered proactive message is not relationship evidence. The normal
+  trace pipeline starts only when the user responds or another real
+  relationship event occurs.
+- OS notification delivery while Nana is closed remains a physical-device
+  phase. Native notification permission and background scheduling must stay
+  behind a service boundary and must not change these cooldown rules.
+
 Future AI extensions should be separated by intent:
 
 - Reply generation.

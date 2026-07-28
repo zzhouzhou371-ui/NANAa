@@ -44,7 +44,14 @@ const ARRAY_STATE_FIELDS = new Set([
   'onlinePresets', 'offlinePresets', 'callLogs', 'blockedUsers',
   'relationshipTraces',
 ]);
-const RECORD_STATE_FIELDS = new Set(['chatHistory', 'themeConfig', 'lastForwardedMsgId', 'unreadCounts', 'paymentsById']);
+const RECORD_STATE_FIELDS = new Set([
+  'chatHistory',
+  'themeConfig',
+  'lastForwardedMsgId',
+  'unreadCounts',
+  'paymentsById',
+  'proactiveChatSchedules',
+]);
 const STRING_STATE_FIELDS = new Set([
   'selectedModel', 'myDesc', 'apiUrl', 'myAvatar', 'myName', 'walletBalance',
   'momentsBg', 'activeOnlinePresetId', 'activeOfflinePresetId', 'speechLanguage',

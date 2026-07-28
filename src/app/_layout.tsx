@@ -150,6 +150,7 @@ export default function RootLayout() {
       if (hydratedState.tempMyAvatar) referencedAvatars.add(hydratedState.tempMyAvatar);
       pruneUnreferencedAvatarFiles(referencedAvatars);
       void useNanaStore.getState().reconcilePayments();
+      void useNanaStore.getState().runProactiveChatHeartbeat();
       setStorageReady(true);
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'Nana could not load local data safely.');
@@ -173,9 +174,20 @@ export default function RootLayout() {
       appStateRef.current = nextState;
       if (storageReady && previousState !== 'active' && nextState === 'active') {
         void useNanaStore.getState().reconcilePayments();
+        void useNanaStore.getState().runProactiveChatHeartbeat();
       }
     });
     return () => subscription.remove();
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    const timer = setInterval(() => {
+      if (appStateRef.current === 'active') {
+        void useNanaStore.getState().runProactiveChatHeartbeat();
+      }
+    }, 60_000);
+    return () => clearInterval(timer);
   }, [storageReady]);
 
   if (!storageReady) {

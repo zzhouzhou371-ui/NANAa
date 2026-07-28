@@ -40,6 +40,14 @@ import {
   type ChatGenerationSource,
 } from '../services/chatRhythmRuntime';
 import {
+  createInitialProactiveSchedule,
+  createLocalProactiveMessage,
+  normalizeProactiveChatSchedules,
+  rescheduleAfterProactiveMessage,
+  rescheduleProactiveAfterInteraction,
+  selectDueProactiveCandidate,
+} from '../services/proactiveChatRuntime';
+import {
   DEFAULT_ONLINE_PRESET,
   DEFAULT_OFFLINE_PRESET,
   DEFAULT_THEME_CONFIG,
@@ -74,6 +82,7 @@ import type {
   WeChatTab, WeChatPage, ChatPanel, IslandNotification,
   CallLog, CallOverlayState, RelationshipTrace,
   ChatReplyPreference, Payment, PaymentKind, PaymentStatus, ReplyMode,
+  ProactiveChatSchedules,
 } from '../types';
 
 import { triggerHaptic } from '../utils/haptics';
@@ -264,6 +273,8 @@ const unreadAfterRemoteEvent = (state: NanaStore, chatId: string) => (
     : (state.unreadCounts[chatId] || 0) + 1
 );
 
+let proactiveHeartbeatInFlight = false;
+
 export interface SendChatMessageOptions {
   textOverride?: string;
   skipUserAppend?: boolean;
@@ -358,6 +369,7 @@ export interface NanaStore {
   activeOfflinePresetId: string;
   callLogs: CallLog[];
   relationshipTraces: RelationshipTrace[];
+  proactiveChatSchedules: ProactiveChatSchedules;
 
   // Persisted: Memory & Voice
   memoryWindowSize: number;
@@ -458,6 +470,7 @@ export interface NanaStore {
   transitionPayment: (id: string, next: PaymentStatus, meta?: PaymentTransitionMeta) => boolean;
   retryPayment: (id: string) => Promise<void>;
   reconcilePayments: (now?: number) => Promise<void>;
+  runProactiveChatHeartbeat: (now?: number) => Promise<void>;
   retryChatMessage: (errorMessageId: number) => Promise<void>;
   startOutgoingCall: (type: 'voice' | 'video') => void;
   startIncomingCall: (type: 'voice' | 'video', characterId: string) => void;
@@ -468,7 +481,7 @@ export interface NanaStore {
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 6;
+export const NANA_PERSIST_VERSION = 7;
 
 type PersistedStateRecord = Record<string, unknown>;
 
@@ -535,6 +548,7 @@ export function migrateNanaPersistedState(persistedState: unknown): PersistedSta
       ? state.blockedUsers.filter((value): value is string => typeof value === 'string')
       : [],
     relationshipTraces: normalizeRelationshipTraces(state.relationshipTraces),
+    proactiveChatSchedules: normalizeProactiveChatSchedules(state.proactiveChatSchedules),
     memoryWindowSize: typeof state.memoryWindowSize === 'number'
       && Number.isFinite(state.memoryWindowSize)
       ? Math.max(1, Math.min(50, Math.floor(state.memoryWindowSize)))
@@ -579,6 +593,7 @@ export function selectNanaPersistedState(state: NanaStore): PersistedStateRecord
     activeOfflinePresetId: state.activeOfflinePresetId,
     callLogs: state.callLogs,
     relationshipTraces: state.relationshipTraces,
+    proactiveChatSchedules: state.proactiveChatSchedules,
     memoryWindowSize: state.memoryWindowSize,
     showMemoryDebug: state.showMemoryDebug,
     autoTTS: state.autoTTS,
@@ -637,6 +652,7 @@ export const useNanaStore = create<NanaStore>()(
       activeOfflinePresetId: 'default_offline',
       callLogs: [],
       relationshipTraces: [],
+      proactiveChatSchedules: {},
 
       memoryWindowSize: 10,
       showMemoryDebug: false,
@@ -1045,6 +1061,14 @@ export const useNanaStore = create<NanaStore>()(
             chatHistory: {
               ...current.chatHistory,
               [chatId]: [...(current.chatHistory[chatId] || []), message],
+            },
+            proactiveChatSchedules: {
+              ...current.proactiveChatSchedules,
+              [chatId]: rescheduleProactiveAfterInteraction(
+                current.proactiveChatSchedules[chatId],
+                chatId,
+                payment.createdAt,
+              ),
             },
             relationshipTraces: upsertRelationshipTrace(current.relationshipTraces, createRelationshipTrace({
               characterId: chatId,
@@ -1527,9 +1551,10 @@ export const useNanaStore = create<NanaStore>()(
               ? (note || copy.sharedAPhoto)
               : (note || '');
         const activeChar = state.characters.find(c => c.id === chatId);
+        const interactionAt = Date.now();
         const messageId = nextMessageId();
         const sourceMessageId = options?.sourceMessageId ?? messageId;
-        const realTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const realTime = new Date(interactionAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const replyMode = characterReplyMode(activeChar);
         const voiceDraft = type !== 'voice'
           ? null
@@ -1607,6 +1632,14 @@ export const useNanaStore = create<NanaStore>()(
           relationshipTraces: options?.skipUserAppend || joiningUserBurst
             ? s.relationshipTraces
             : upsertRelationshipTrace(s.relationshipTraces, initialTrace),
+          proactiveChatSchedules: {
+            ...s.proactiveChatSchedules,
+            [chatId]: rescheduleProactiveAfterInteraction(
+              s.proactiveChatSchedules[chatId],
+              chatId,
+              interactionAt,
+            ),
+          },
           ...(type === 'text' || type === 'voice'
             ? { chatInput: '', chatPanel: 'none' as ChatPanel }
             : { chatPanel: 'none' as ChatPanel }),
@@ -1846,6 +1879,14 @@ export const useNanaStore = create<NanaStore>()(
                     recallWeight: type === 'voice' ? 0.7 : 0.5,
                     state: 'digested',
                   })),
+                  proactiveChatSchedules: {
+                    ...s.proactiveChatSchedules,
+                    [chatId]: rescheduleProactiveAfterInteraction(
+                      s.proactiveChatSchedules[chatId],
+                      chatId,
+                      Date.now(),
+                    ),
+                  },
                 } : {}),
                 chatHistory: {
                   ...s.chatHistory,
@@ -1926,6 +1967,129 @@ export const useNanaStore = create<NanaStore>()(
             };
           });
           if (didCommit) triggerHaptic('error');
+        }
+      },
+
+      runProactiveChatHeartbeat: async (now = Date.now()) => {
+        if (proactiveHeartbeatInFlight) return;
+        proactiveHeartbeatInFlight = true;
+        try {
+          set(state => {
+            let nextSchedules = state.proactiveChatSchedules;
+            let changed = false;
+            const friendIds = new Set(state.friends);
+            for (const character of state.characters) {
+              if (!friendIds.has(character.id) || nextSchedules[character.id]) continue;
+              if (!changed) nextSchedules = { ...nextSchedules };
+              nextSchedules[character.id] = createInitialProactiveSchedule(character.id, now);
+              changed = true;
+            }
+            return changed ? { proactiveChatSchedules: nextSchedules } : {};
+          });
+
+          const state = get();
+          if (
+            state.callOverlay.show
+            || Object.keys(state.pendingChatRequests).length > 0
+            || Object.keys(state.pendingPaymentReactions).length > 0
+          ) return;
+          const character = selectDueProactiveCandidate({
+            characters: state.characters,
+            friends: state.friends,
+            schedules: state.proactiveChatSchedules,
+            pendingChatRequests: state.pendingChatRequests,
+            blockedUsers: state.blockedUsers,
+            now,
+          });
+          if (!character) return;
+
+          const originalSchedule = state.proactiveChatSchedules[character.id];
+          if (!originalSchedule) return;
+          const copy = runtimeCopyFor(state.themeConfig.language);
+          const draft = createLocalProactiveMessage({
+            characterId: character.id,
+            characterName: character.name,
+            language: state.themeConfig.language,
+            now,
+          });
+          const proactiveMessages = splitCharacterReplyIntoMessages(draft);
+          if (proactiveMessages.length === 0) return;
+          const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
+
+          let deliveredAll = false;
+          for (const [messageIndex, messageText] of proactiveMessages.entries()) {
+            if (messageIndex > 0) {
+              await waitForCharacterFollowUp({
+                characterId: character.id,
+                messageText,
+                messageIndex,
+                fast: fastChat,
+              });
+            }
+
+            const isLastMessage = messageIndex === proactiveMessages.length - 1;
+            let didCommit = false;
+            set(current => {
+              const liveSchedule = current.proactiveChatSchedules[character.id];
+              const sequenceIsCurrent = messageIndex === 0
+                ? liveSchedule?.nextDueAt === originalSchedule.nextDueAt
+                  && liveSchedule.nextDueAt <= now
+                : liveSchedule?.lastSentAt === now
+                  && liveSchedule.lastInteractionAt === originalSchedule.lastInteractionAt;
+              if (
+                !sequenceIsCurrent
+                || current.callOverlay.show
+                || Object.keys(current.pendingChatRequests).length > 0
+                || Object.keys(current.pendingPaymentReactions).length > 0
+                || current.blockedUsers.includes(character.id)
+                || !current.friends.includes(character.id)
+              ) return {};
+
+              didCommit = true;
+              if (isLastMessage) deliveredAll = true;
+              return {
+                chatHistory: {
+                  ...current.chatHistory,
+                  [character.id]: [...(current.chatHistory[character.id] || []), {
+                    id: nextMessageId(),
+                    sender: 'char',
+                    text: messageText,
+                    time: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    type: 'text' as MessageType,
+                    generationSource: 'proactive' as const,
+                  }],
+                },
+                proactiveChatSchedules: messageIndex === 0
+                  ? {
+                      ...current.proactiveChatSchedules,
+                      [character.id]: rescheduleAfterProactiveMessage(
+                        liveSchedule,
+                        character.id,
+                        now,
+                      ),
+                    }
+                  : current.proactiveChatSchedules,
+                unreadCounts: {
+                  ...current.unreadCounts,
+                  [character.id]: unreadAfterRemoteEvent(current, character.id),
+                },
+              };
+            });
+            if (!didCommit) return;
+          }
+
+          if (!deliveredAll) return;
+          set({
+            islandNotification: {
+              title: character.name,
+              desc: copy.newMessage,
+              icon: character.avatar,
+              status: 'success',
+            },
+          });
+          setTimeout(() => useNanaStore.setState({ islandNotification: null }), 3000);
+        } finally {
+          proactiveHeartbeatInFlight = false;
         }
       },
 
