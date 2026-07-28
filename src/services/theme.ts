@@ -19,7 +19,7 @@ export interface ChromeStyleDefinition {
 export const WALLPAPER_OPTIONS: readonly WallpaperDefinition[] = [
   {
     id: 'system',
-    previewSource: require('../../assets/backgrounds/time-cycle-v1/current-time-preview.png'),
+    previewSource: require('../../assets/backgrounds/time-cycle-v1/current-time-preview.jpg'),
     source: null,
   },
   {
