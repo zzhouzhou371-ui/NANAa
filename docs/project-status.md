@@ -120,6 +120,12 @@ baked interaction layers.
 
 - Chat AI work is isolated by immutable chat ID and request token. Stale replies
   cannot write into a different chat, and retry reuses the original message.
+- Chat replies now pass through a deterministic rhythm runtime. Character
+  presence and message length produce a bounded delivery window, so responses
+  no longer appear unnaturally instant. An empty API key uses a localized local
+  sandbox reply through the same request and persistence path, allowing Android
+  emulator testing without sending conversations to a model provider. Stored
+  character messages record their generation source for later diagnostics.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
@@ -162,6 +168,10 @@ baked interaction layers.
   UI smoke path after the SQLite and FlashList migration. A deterministic
   2,000-message small-Android stress path also reached the newest message while
   mounting fewer than 200 bubble nodes, confirming list recycling.
+- The 2026-07-28 online-chat rhythm pass completed TypeScript, ESLint, text,
+  storage, chat-storage, chat-request, and chat-rhythm contracts. The local
+  simulator path is deterministic under the fast-chat test flag and remote
+  generation remains selected whenever a non-blank API key is present.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -209,17 +219,19 @@ have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Regenerate the Android native project for `expo-sqlite`, compile a new
-   binary, and run legacy-migration/restart plus high-volume chat checks on a
-   physical Android device.
-2. Build a standalone Android preview APK for sustained model and memory use
-   without Metro or USB.
-3. Establish Apple signing/device access, build the iOS development client, and
-   run the same physical-device matrix on iOS.
-4. Continue the online memory vertical slice with canonical fact extraction,
-   deterministic recall scoring, and a future product flow for reviewing
-   corrections after the frontend freeze ends.
-5. Add automated native end-to-end coverage where the build environment allows.
-6. Build offline meeting later as a standalone simulated-phone app with its own
+1. Extend the online-chat rhythm layer with burst-message batching, so a user
+   can send several short messages while the character is preparing one reply.
+2. Add durable proactive-event scheduling and unread notifications without
+   requiring the app to remain open.
+3. Add explicit delivery/read state and retry semantics for outgoing messages.
+4. Run the current SQLite migration, high-volume chat, and model-backed rhythm
+   checks together on a physical Android device when the next test APK is
+   intentionally prepared.
+5. Continue the online memory vertical slice with canonical fact extraction
+   and deterministic recall scoring after sustained real-model conversations
+   provide test data.
+6. Establish Apple signing/device access and run the same physical-device
+   matrix on iOS.
+7. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

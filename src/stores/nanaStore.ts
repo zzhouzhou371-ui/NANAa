@@ -27,6 +27,12 @@ import {
   isCurrentChatRequest,
 } from '../services/chatRequestCoordinator';
 import {
+  generateLocalSandboxReply,
+  planChatReply,
+  waitForChatReplyPlan,
+  type ChatGenerationSource,
+} from '../services/chatRhythmRuntime';
+import {
   DEFAULT_ONLINE_PRESET,
   DEFAULT_OFFLINE_PRESET,
   DEFAULT_THEME_CONFIG,
@@ -1683,48 +1689,16 @@ export const useNanaStore = create<NanaStore>()(
           return;
         }
 
-        if (!state.apiKey) {
-          setTimeout(() => {
-            if (!sourceMessageStillExists()) return;
-            triggerHaptic('error');
-            set(s => ({
-              chatHistory: {
-                ...s.chatHistory,
-                [chatId]: [...(s.chatHistory[chatId] || []), {
-                  id: nextMessageId(), sender: 'system',
-                  text: copy.apiKeyRequiredSystem,
-                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                  type: 'system',
-                }],
-              },
-              relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
-                characterId: chatId,
-                source: traceSource,
-                sourceEventId: String(sourceMessageId),
-                title: traceTitle,
-                summary: initialSummary,
-                recallWeight: type === 'text' ? 0.25 : 0.5,
-                state: 'failed',
-              })),
-              unreadCounts: {
-                ...s.unreadCounts,
-                [chatId]: unreadAfterRemoteEvent(s, chatId),
-              },
-              islandNotification: {
-                title: activeChar?.name || 'AI',
-                desc: copy.apiKeyRequiredShort,
-                icon: activeChar?.avatar,
-                status: 'error',
-              },
-            }));
-            setTimeout(() => set({ islandNotification: null }), 2600);
-          }, 500);
-          return;
-        }
-
         if (!sourceMessageStillExists()) return;
 
         const requestId = `reply:${chatId}:${sourceMessageId}:${Date.now()}`;
+        const hasRemoteApiKey = state.apiKey.trim().length > 0;
+        const replyPlan = planChatReply({
+          characterId: chatId,
+          userText,
+          fast: process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1',
+        });
+        const generationSource: ChatGenerationSource = hasRemoteApiKey ? 'remote' : 'localSandbox';
         set(s => ({
           pendingChatRequests: beginChatRequest(s.pendingChatRequests, chatId, requestId).pending,
           islandNotification: { title: activeChar?.name || 'AI', desc: copy.typing, icon: activeChar?.avatar, status: 'typing' },
@@ -1733,16 +1707,27 @@ export const useNanaStore = create<NanaStore>()(
 
         try {
           const activePreset = state.onlinePresets.find(p => p.id === state.activeOnlinePresetId) || DEFAULT_ONLINE_PRESET;
-          const { text: replyText, loreCount } = await generateReply({
-            userText, userName: state.myName, userDesc: state.myDesc,
-            activeChar, activePreset,
-            chatHistory: state.chatHistory[chatId] || [],
-            worldBookEntries: state.worldBookEntries,
-            relationshipTraces: state.relationshipTraces,
-            memoryWindowSize: state.memoryWindowSize,
-            activeChatId: chatId,
-            apiUrl: state.apiUrl, apiKey: state.apiKey, selectedModel: state.selectedModel, replaceMacros,
-          });
+          const generatedReply = hasRemoteApiKey
+            ? await generateReply({
+                userText, userName: state.myName, userDesc: state.myDesc,
+                activeChar, activePreset,
+                chatHistory: state.chatHistory[chatId] || [],
+                worldBookEntries: state.worldBookEntries,
+                relationshipTraces: state.relationshipTraces,
+                memoryWindowSize: state.memoryWindowSize,
+                activeChatId: chatId,
+                apiUrl: state.apiUrl, apiKey: state.apiKey, selectedModel: state.selectedModel, replaceMacros,
+              })
+            : {
+                text: generateLocalSandboxReply({
+                  characterName: activeChar?.name,
+                  userText,
+                  language: state.themeConfig.language,
+                }),
+                loreCount: 0,
+              };
+          const { text: replyText, loreCount } = generatedReply;
+          await waitForChatReplyPlan(replyPlan);
           if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
 
           const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1794,6 +1779,7 @@ export const useNanaStore = create<NanaStore>()(
                 ...s.chatHistory,
                 [chatId]: [...(s.chatHistory[chatId] || []), {
                   id: nextMessageId(), sender: 'char', text: replyText, time: replyTime,
+                  generationSource,
                   ...(charVoiceDraft
                     ? {
                         type: 'voice' as MessageType,

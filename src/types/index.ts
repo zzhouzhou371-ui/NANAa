@@ -61,6 +61,7 @@ export interface Message {
   imageHeight?: number;
   replyMode?: ReplyMode;
   paymentId?: string;
+  generationSource?: 'remote' | 'localSandbox' | 'proactive';
 }
 
 export type ChatHistory = Record<string, Message[]>;

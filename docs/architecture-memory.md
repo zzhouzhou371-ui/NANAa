@@ -14,6 +14,8 @@ memory, native media, or new app surfaces.
 - Persisted and transient state lives in `src/stores/nanaStore.ts`.
 - Shared product types live in `src/types/index.ts`.
 - AI context and API calls live in `src/services/ai.ts`.
+- Online presence, reply timing, and the no-key simulator adapter live in
+  `src/services/chatRhythmRuntime.ts`.
 - Native media boundaries live in `src/services/`.
 - Storage recovery helpers live in `src/services/storage.ts`.
 - Relationship trace helpers live in
@@ -207,6 +209,15 @@ instead of mounting every historical bubble in a ScrollView. Current AI reply
 generation still receives the compatible message array and applies its
 existing recent-message window, so the database migration does not change
 prompt behavior or memory evidence.
+
+Chat delivery is planned separately from text generation. The rhythm runtime
+derives a deterministic online/away/resting state and a bounded delivery window
+from character identity, local time, and message length. With an API key, the
+remote model may generate while that window is running; without a key, a
+localized sandbox adapter exercises the same request, typing, persistence, and
+unread-count path in an emulator. Every character reply records whether it came
+from the remote model, local sandbox, or a future proactive event. Sandbox text
+is test data, not a replacement for production character generation.
 
 Future AI extensions should be separated by intent:
 
