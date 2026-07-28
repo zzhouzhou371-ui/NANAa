@@ -263,6 +263,7 @@ export function CharacterView() {
         voiceProfileId: newCharSupportsVoiceReply ? (newCharVoiceProfileId.trim() || undefined) : undefined,
         supportsVideoPersona: newCharSupportsVideoPersona,
         videoPersonaAsset: newCharSupportsVideoPersona ? (newCharVideoPersonaAsset.trim() || undefined) : undefined,
+        proactiveMessagingEnabled: true,
       };
       set({ characters: [...state.characters, newChar], editingCharId: null, characterEditorOpen: false });
     }

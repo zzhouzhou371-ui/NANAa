@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, View, Text, ScrollView } from 'react-native';
-import { ImagePlus, MessageCircle, Video } from 'lucide-react-native';
+import { ActivityIndicator, View, Text, ScrollView, Switch } from 'react-native';
+import { BellRing, ImagePlus, MessageCircle, Video } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { AnimatedPressable } from './primitives';
@@ -17,6 +17,9 @@ export function ProfileView() {
   const { t } = useApp();
   const activeProfileId = useNanaStore(s => s.activeProfileId);
   const characters = useNanaStore(s => s.characters);
+  const setCharacterProactiveMessagingEnabled = useNanaStore(
+    s => s.setCharacterProactiveMessagingEnabled,
+  );
   const set = useNanaStore.setState;
   const [avatarPickerBusy, setAvatarPickerBusy] = useState(false);
 
@@ -33,6 +36,7 @@ export function ProfileView() {
   const replyPreferenceLabel = replyPreference === 'textOnly'
     ? t.replyTextOnly
     : replyPreference === 'voicePreferred' ? t.replyVoicePreferred : t.replyAdaptive;
+  const proactiveMessagingEnabled = char.proactiveMessagingEnabled !== false;
 
   const handleChooseAvatar = async () => {
     if (avatarPickerBusy) return;
@@ -118,6 +122,39 @@ export function ProfileView() {
               >
                 {replyPreferenceLabel}
               </Text>
+            </View>
+            <View
+              style={{
+                minHeight: 72,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+                paddingHorizontal: 4,
+                paddingVertical: 8,
+                borderBottomWidth: 0.5,
+                borderBottomColor: 'rgba(48,37,55,0.18)',
+              }}
+            >
+              <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <BellRing size={16} color={neumorphicPalette.onLightPrimary} />
+                  <Text style={{ flex: 1, minWidth: 0, color: neumorphicPalette.onLightPrimary, fontSize: 13, lineHeight: 18, fontWeight: '700' }}>
+                    {t.proactiveMessages}
+                  </Text>
+                </View>
+                <Text style={{ marginLeft: 24, color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 16, fontWeight: '600' }}>
+                  {proactiveMessagingEnabled ? t.proactiveMessagesOn : t.proactiveMessagesOff}
+                </Text>
+              </View>
+              <Switch
+                testID={`proactive-message-switch-${char.id}`}
+                accessibilityLabel={`${char.name}: ${t.proactiveMessages}`}
+                accessibilityHint={t.proactiveMessagesDesc}
+                value={proactiveMessagingEnabled}
+                onValueChange={enabled => {
+                  setCharacterProactiveMessagingEnabled(char.id, enabled);
+                }}
+              />
             </View>
             <View style={{ minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 4 }}>
               <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>

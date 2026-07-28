@@ -358,6 +358,100 @@ export async function generateReply(params: GenerateParams): Promise<{ text: str
   return { text: text || '(No response)', loreCount: context.loreCount };
 }
 
+interface GenerateProactiveParams extends Omit<GenerateParams, 'userText'> {
+  language: string;
+  focusEvent?: RelationshipTrace;
+}
+
+export async function generateProactiveReply(
+  params: GenerateProactiveParams,
+): Promise<{ text: string; loreCount: number }> {
+  const {
+    userName,
+    activeChar,
+    activePreset,
+    chatHistory,
+    worldBookEntries,
+    relationshipTraces,
+    memoryWindowSize,
+    activeChatId,
+    apiUrl,
+    apiKey,
+    selectedModel,
+    replaceMacros,
+    focusEvent,
+  } = params;
+  const charName = activeChar?.name || 'Character';
+  const contextSearchText = focusEvent?.summary || activeChar?.desc || '';
+  const context = buildAiContext({
+    userText: contextSearchText,
+    userName,
+    userDesc: params.userDesc,
+    activeChar,
+    activePreset,
+    chatHistory,
+    worldBookEntries,
+    relationshipTraces,
+    memoryWindowSize,
+    activeChatId,
+    replaceMacros,
+  });
+  const isChinese = params.language.toLowerCase().startsWith('zh');
+  const taskInstruction = [
+    'Initiate an online chat as the character. The user has not just sent a new message.',
+    'Stay fully consistent with the character definition, online scene preset, recent conversation, and shared memories.',
+    focusEvent
+      ? `A recent real relationship event may motivate this outreach: ${focusEvent.summary}`
+      : 'There is no new event to follow up. Reach out naturally because the character thought of the user.',
+    'Do not invent a real-world event, meeting, action, promise, or memory that is not present in the supplied context.',
+    'Do not mention prompts, memory systems, APIs, scheduling, or that this is a proactive task.',
+    'Write one short message most of the time; two or three short bubbles are allowed only when natural, separated by <NANA_MSG>.',
+    isChinese ? 'Write the message in natural Chinese.' : 'Write the message in natural English.',
+  ].join('\n');
+  const baseUrl = normalizeBaseUrl(apiUrl);
+  const modelName = selectedModel || 'gemini-1.5-flash';
+
+  let text = '';
+  if (isOfficialGeminiBaseUrl(baseUrl)) {
+    const formattedHistory = activeTextMessages(chatHistory)
+      .map(message => `${message.sender === 'user' ? userName : charName}: ${message.text}`)
+      .slice(-15)
+      .join('\n');
+    text = await postGeminiText({
+      baseUrl,
+      model: modelName,
+      apiKey,
+      text: `System: ${context.systemInstruction}\n\n[Proactive Outreach Task]\n${taskInstruction}\n\nRecent Chat History:\n${formattedHistory}\n\n${charName}:`,
+      temperature: 0.9,
+      timeoutMs: 20_000,
+    });
+  } else {
+    text = await postOpenAICompatible({
+      baseUrl,
+      model: modelName,
+      apiKey,
+      messages: [
+        {
+          role: 'system',
+          content: `${context.systemInstruction}\n\n[Proactive Outreach Task]\n${taskInstruction}`,
+        },
+        ...activeTextMessages(chatHistory).slice(-15).map(message => ({
+          role: message.sender === 'user' ? 'user' as const : 'assistant' as const,
+          content: message.text,
+        })),
+        {
+          role: 'user',
+          content: 'Write only the character message that should be sent now.',
+        },
+      ],
+      temperature: 0.9,
+      timeoutMs: 20_000,
+    });
+  }
+  if (!text.trim()) throw new Error('AI service returned an empty proactive message.');
+  return { text, loreCount: context.loreCount };
+}
+
 function buildPrompt(
   systemInstruction: string,
   chatHistory: Message[],

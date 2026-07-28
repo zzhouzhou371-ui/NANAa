@@ -238,15 +238,29 @@ background loop:
 
 - Each friend receives a persisted next-due schedule. A new or migrated
   install initializes the schedule without sending immediately.
+- `Character.proactiveMessagingEnabled` is the user-owned permission for that
+  relationship. It is controlled from the online character profile. Disabling
+  it removes the character from scheduling immediately; re-enabling creates a
+  new future window rather than sending a catch-up message.
 - Real chat activity postpones outreach by 6-10 hours. A delivered proactive
   message enters an 18-30 hour per-character cooldown, while a four-hour global
   cooldown prevents several characters from arriving as a burst.
 - Startup, foreground return, and a lightweight foreground heartbeat check at
   most one eligible character. Blocked/non-friend characters, resting
   characters, active calls, and in-flight chat replies are excluded.
-- The first adapter uses localized deterministic copy and the same one-to-three
-  bubble, durable-history, active-chat, and unread paths as ordinary character
-  messages. Its generation source is recorded as `proactive`.
+- With a configured model API, proactive generation receives the character
+  definition, active online preset, recent chat, world-book context, and
+  recallable relationship traces. The newest unused real relationship event
+  may motivate one follow-up; its trace ID is stored so older events are not
+  rotated back in as artificial novelty.
+- Without an API key, a localized deterministic adapter derives a restrained
+  warm/reserved/playful/neutral tone from the character description and can
+  follow up the same real event. Both adapters use the same one-to-three
+  bubble, durable-history, active-chat, and unread paths. Their message
+  generation source is recorded as `proactive`.
+- Model prompts explicitly prohibit invented meetings, actions, promises, and
+  memories. Network or provider failure falls back to the local adapter and
+  must still pass the live schedule and user-permission guards before commit.
 - An unanswered proactive message is not relationship evidence. The normal
   trace pipeline starts only when the user responds or another real
   relationship event occurs.

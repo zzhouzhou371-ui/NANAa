@@ -13,7 +13,7 @@ const partializeEnd = storeSource.indexOf('export const useNanaStore', partializ
 const partializeSource = storeSource.slice(partializeStart, partializeEnd);
 expect(partializeStart >= 0 && partializeEnd > partializeStart, 'persisted-state selector must exist');
 expect(!partializeSource.includes('chatHistory: state.chatHistory'), 'chat history must not be duplicated in the Zustand JSON payload');
-expect(storeSource.includes('NANA_PERSIST_VERSION = 7'), 'proactive scheduling and durable chat storage require storage version 7');
+expect(storeSource.includes('NANA_PERSIST_VERSION = 8'), 'character-level proactive controls and durable chat storage require storage version 8');
 
 const nativeRepository = read('src/repositories/chatMessageRepository.native.ts');
 for (const required of [

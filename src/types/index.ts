@@ -71,7 +71,8 @@ export interface ProactiveChatSchedule {
   lastInteractionAt: number;
   nextDueAt: number;
   lastSentAt?: number;
-  lastReason?: 'quietReconnect';
+  lastReason?: 'quietReconnect' | 'eventFollowUp';
+  lastContextTraceId?: string;
 }
 
 export type ProactiveChatSchedules = Record<string, ProactiveChatSchedule>;
@@ -90,6 +91,7 @@ export interface Character {
   voiceProfileId?: string;
   supportsVideoPersona?: boolean;
   videoPersonaAsset?: string;
+  proactiveMessagingEnabled?: boolean;
 }
 
 export type WallpaperId =

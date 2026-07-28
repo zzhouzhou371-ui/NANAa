@@ -139,6 +139,14 @@ baked interaction layers.
   blocked users, resting presence, calls, and in-flight replies. Proactive
   bubbles use normal durable history and unread behavior but do not become
   relationship memory until the user creates a real response event.
+- Each online character profile now exposes a native proactive-message switch.
+  Legacy and built-in characters default to enabled; disabling takes effect
+  immediately, and re-enabling schedules a future window instead of sending
+  immediately. With an API key, proactive text is generated from the
+  character definition, online preset, recent chat, world-book context, and
+  the newest unused real relationship event. Without a key or after a provider
+  failure, the local adapter uses persona-sensitive localized copy. Event trace
+  IDs are consumed once so outreach cannot cycle backward through old events.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
@@ -195,6 +203,10 @@ baked interaction layers.
   delivery, and the rule that unanswered outreach writes no memory trace. The
   full 360x800 chat, voice, payment, avatar, and call UI smoke path passes at
   `screenshots/smoke-proactive-chat/report.json`.
+- The persona/event and per-character control extension passes the same
+  360x800 path at `screenshots/smoke-proactive-profile/report.json`; the online
+  profile switch remains readable without displacing the existing reply and
+  video capability rows.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,
@@ -244,12 +256,12 @@ have a clear relationship job and write to the same trace system.
 
 1. Add physical-device system notifications for due proactive events while the
    app is closed, preserving the current durable cooldown and eligibility rules.
-2. Add model-personalized proactive copy behind an explicit cost/network
-   policy; retain the deterministic local adapter for emulator regression.
+2. Add an explicit user-facing network/cost policy for model-generated
+   proactive messages before enabling closed-app background generation.
 3. Add explicit delivery/read state and retry semantics for outgoing messages.
-4. Run the current SQLite migration, high-volume chat, and model-backed rhythm
-   checks together on a physical Android device when the next test APK is
-   intentionally prepared.
+4. Run the current SQLite migration, high-volume chat, model-backed rhythm, and
+   persona/event-driven proactive checks together on a physical Android device
+   when the next test APK is intentionally prepared.
 5. Continue the online memory vertical slice with canonical fact extraction
    and deterministic recall scoring after sustained real-model conversations
    provide test data.

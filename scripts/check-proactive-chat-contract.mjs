@@ -46,6 +46,7 @@ const {
   rescheduleAfterProactiveMessage,
   rescheduleProactiveAfterInteraction,
   selectDueProactiveCandidate,
+  selectProactiveFocusEvent,
 } = module.exports;
 
 const errors = [];
@@ -76,6 +77,17 @@ expect(
     && sent.nextDueAt < now + 10_000 + PROACTIVE_SENT_DELAY_MAX_MS,
   'a proactive delivery must enter the longer anti-spam window',
 );
+const eventSent = rescheduleAfterProactiveMessage(
+  interacted,
+  'luna-id',
+  now + 20_000,
+  'trace:event:2',
+);
+expect(
+  eventSent.lastReason === 'eventFollowUp'
+    && eventSent.lastContextTraceId === 'trace:event:2',
+  'event-motivated outreach must remember which event it used',
+);
 
 const normalized = normalizeProactiveChatSchedules({
   'luna-id': initial,
@@ -90,6 +102,7 @@ const characters = [
   { id: 'blocked-id', name: 'Blocked', avatar: 'B', desc: '' },
   { id: 'pending-id', name: 'Pending', avatar: 'P', desc: '' },
   { id: 'resting-id', name: 'Resting', avatar: 'R', desc: '' },
+  { id: 'disabled-id', name: 'Disabled', avatar: 'D', desc: '', proactiveMessagingEnabled: false },
   { id: 'stranger-id', name: 'Stranger', avatar: 'S', desc: '' },
 ];
 const dueSchedules = Object.fromEntries(characters.map((character, index) => [
@@ -102,7 +115,7 @@ const dueSchedules = Object.fromEntries(characters.map((character, index) => [
 ]));
 const candidate = selectDueProactiveCandidate({
   characters,
-  friends: ['later-id', 'luna-id', 'blocked-id', 'pending-id', 'resting-id'],
+  friends: ['later-id', 'luna-id', 'blocked-id', 'pending-id', 'resting-id', 'disabled-id'],
   schedules: dueSchedules,
   pendingChatRequests: { 'pending-id': 'request-1' },
   blockedUsers: ['blocked-id'],
@@ -119,6 +132,15 @@ const restingOnly = selectDueProactiveCandidate({
   now,
 });
 expect(restingOnly === null, 'resting characters must not initiate a conversation');
+const disabledOnly = selectDueProactiveCandidate({
+  characters,
+  friends: ['disabled-id'],
+  schedules: dueSchedules,
+  pendingChatRequests: {},
+  blockedUsers: [],
+  now,
+});
+expect(disabledOnly === null, 'a character-level user opt-out must remove the character from proactive candidates');
 
 const cooldownCandidate = selectDueProactiveCandidate({
   characters,
@@ -141,6 +163,7 @@ expect(cooldownCandidate === null, 'global cooldown must prevent several charact
 const zhDraft = createLocalProactiveMessage({
   characterId: 'luna-id',
   characterName: 'Luna',
+  personaDescription: 'A gentle and caring friend with a soft voice.',
   language: 'zh-CN',
   now,
 });
@@ -152,6 +175,48 @@ const enDraft = createLocalProactiveMessage({
 });
 expect(/[\u3400-\u9fff]/u.test(zhDraft) && !zhDraft.includes('API'), 'Chinese proactive copy must be natural and implementation-free');
 expect(/[A-Za-z]/u.test(enDraft) && !enDraft.includes('API'), 'English proactive copy must be localized and implementation-free');
+const eventDraft = createLocalProactiveMessage({
+  characterId: 'luna-id',
+  characterName: 'Luna',
+  personaDescription: 'Gentle and caring.',
+  recentEventSummary: 'User and Luna chose a song for a rainy evening.',
+  language: 'en',
+  now,
+});
+expect(
+  eventDraft.includes('chose a song') && eventDraft.includes('<NANA_MSG>'),
+  'local fallback must be able to follow up a real shared event',
+);
+
+const traceOne = {
+  id: 'trace:event:1',
+  characterId: 'luna-id',
+  remember: true,
+  state: 'digested',
+  summary: 'Earlier event',
+  occurredAt: now - 20_000,
+};
+const traceTwo = {
+  id: 'trace:event:2',
+  characterId: 'luna-id',
+  remember: true,
+  state: 'digested',
+  summary: 'Latest event',
+  occurredAt: now - 10_000,
+};
+expect(
+  selectProactiveFocusEvent([traceOne, traceTwo], 'luna-id', initial, now)?.id === 'trace:event:2',
+  'the latest real relationship event must motivate the next eligible outreach',
+);
+expect(
+  selectProactiveFocusEvent(
+    [traceOne, traceTwo],
+    'luna-id',
+    { ...initial, lastContextTraceId: 'trace:event:2' },
+    now,
+  ) === null,
+  'the scheduler must not rotate backward and reuse an older event after following up the latest one',
+);
 
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
 const heartbeatStart = storeSource.indexOf('runProactiveChatHeartbeat: async');
@@ -160,11 +225,25 @@ const heartbeatSource = storeSource.slice(heartbeatStart, heartbeatEnd);
 expect(heartbeatStart >= 0, 'the store must expose a proactive heartbeat');
 expect(heartbeatSource.includes('createInitialProactiveSchedule'), 'first launch must initialize durable schedules');
 expect(heartbeatSource.includes('selectDueProactiveCandidate'), 'the heartbeat must apply eligibility and cooldown rules');
+expect(heartbeatSource.includes('selectProactiveFocusEvent'), 'the heartbeat must select a real relationship event when one is new');
+expect(heartbeatSource.includes('generateProactiveReply({'), 'configured devices must generate outreach from character and relationship context');
+expect(heartbeatSource.includes('personaDescription: character.desc'), 'the emulator fallback must still reflect character persona');
 expect(heartbeatSource.includes("generationSource: 'proactive'"), 'proactive messages must retain their diagnostic source');
 expect(heartbeatSource.includes('unreadAfterRemoteEvent'), 'proactive messages must enter the normal unread path');
-expect(!heartbeatSource.includes('relationshipTraces:'), 'unanswered proactive outreach must not become relationship memory');
+expect(
+  !heartbeatSource.includes('relationshipTraces: upsertRelationshipTrace'),
+  'unanswered proactive outreach must not become relationship memory',
+);
 expect(storeSource.includes('normalizeProactiveChatSchedules(state.proactiveChatSchedules)'), 'persisted schedules must pass through migration validation');
 expect(storeSource.includes('rescheduleProactiveAfterInteraction('), 'real chat activity must postpone proactive outreach');
+expect(
+  storeSource.includes('setCharacterProactiveMessagingEnabled: (characterId, enabled)'),
+  'the store must expose an atomic character-level opt-in action',
+);
+expect(
+  storeSource.includes('proactiveMessagingEnabled: value.proactiveMessagingEnabled !== false'),
+  'legacy characters must migrate to the enabled default',
+);
 
 const layoutSource = readFileSync(resolve(root, 'src/app/_layout.tsx'), 'utf8');
 expect(layoutSource.includes('runProactiveChatHeartbeat()'), 'app startup must check due proactive events');
@@ -176,6 +255,20 @@ expect(layoutSource.includes('setInterval(() =>'), 'a long foreground session mu
 
 const storageSource = readFileSync(resolve(root, 'src/services/storage.ts'), 'utf8');
 expect(storageSource.includes("'proactiveChatSchedules'"), 'portable storage must allow validated proactive schedules');
+
+const profileSource = readFileSync(resolve(root, 'src/components/ProfileView.tsx'), 'utf8');
+expect(profileSource.includes('<Switch'), 'the online character profile must expose a native proactive-message switch');
+expect(
+  profileSource.includes('setCharacterProactiveMessagingEnabled(char.id, enabled)'),
+  'the profile switch must use the persisted character action',
+);
+
+const aiSource = readFileSync(resolve(root, 'src/services/ai.ts'), 'utf8');
+expect(aiSource.includes('export async function generateProactiveReply'), 'AI service must own proactive generation');
+expect(
+  aiSource.includes('Do not invent a real-world event'),
+  'proactive model prompts must forbid fabricated events and memories',
+);
 
 if (errors.length > 0) {
   console.error('Proactive chat contract check failed:');

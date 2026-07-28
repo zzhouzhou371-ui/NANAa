@@ -2,7 +2,12 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { replaceMacros } from '../utils/macros';
-import { generateReply, fetchModelList, generatePaymentReaction } from '../services/ai';
+import {
+  generateReply,
+  generateProactiveReply,
+  fetchModelList,
+  generatePaymentReaction,
+} from '../services/ai';
 import { synthesizeSpeechAudio, transcribeAudioCapture } from '../services/audioAiRuntime';
 import {
   appendCallCaptureResult,
@@ -46,6 +51,7 @@ import {
   rescheduleAfterProactiveMessage,
   rescheduleProactiveAfterInteraction,
   selectDueProactiveCandidate,
+  selectProactiveFocusEvent,
 } from '../services/proactiveChatRuntime';
 import {
   DEFAULT_ONLINE_PRESET,
@@ -159,6 +165,7 @@ const normalizeCharacter = (value: unknown): unknown => {
     ...value,
     chatReplyPreference: preference,
     preferredReplyMode: preferenceToLegacyReplyMode(preference),
+    proactiveMessagingEnabled: value.proactiveMessagingEnabled !== false,
   };
 };
 
@@ -463,6 +470,7 @@ export interface NanaStore {
   setActiveApp: (app: string | null) => void;
   goBack: () => boolean;
   setWalletBalance: (value: string) => boolean;
+  setCharacterProactiveMessagingEnabled: (characterId: string, enabled: boolean) => void;
   clearChat: (chatId: string) => void;
   correctRelationshipMemory: (traceId: string, summary: string) => boolean;
   sendChatMessage: (type?: MessageType, amount?: string, note?: string, mediaCapture?: MediaCaptureResult, options?: SendChatMessageOptions) => Promise<void>;
@@ -481,7 +489,7 @@ export interface NanaStore {
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 7;
+export const NANA_PERSIST_VERSION = 8;
 
 type PersistedStateRecord = Record<string, unknown>;
 
@@ -620,9 +628,9 @@ export const useNanaStore = create<NanaStore>()(
       momentsBg: 'https://images.unsplash.com/photo-1707343843437-caacff5cfa74?q=80&w=600',
       friends: ['luna-id', 'kai-id', 'aria-id'],
       characters: [
-        { id: 'luna-id', name: 'Luna', avatar: 'L', gender: 'Female', age: '22', desc: 'A gentle and caring maid who always puts others first. She speaks with a soft, polite tone and is fiercely loyal to those she trusts.' },
-        { id: 'kai-id', name: 'Kai', avatar: 'K', gender: 'Male', age: '27', desc: 'A stoic warrior from the northern clans. Quiet, observant, and disciplined in combat, with a softer side he rarely shows.' },
-        { id: 'aria-id', name: 'Aria', avatar: 'A', gender: 'Female', age: '24', desc: 'A free-spirited bard who travels the world collecting stories and songs. Witty, charming, and never without her trusty lute.' },
+        { id: 'luna-id', name: 'Luna', avatar: 'L', gender: 'Female', age: '22', desc: 'A gentle and caring maid who always puts others first. She speaks with a soft, polite tone and is fiercely loyal to those she trusts.', proactiveMessagingEnabled: true },
+        { id: 'kai-id', name: 'Kai', avatar: 'K', gender: 'Male', age: '27', desc: 'A stoic warrior from the northern clans. Quiet, observant, and disciplined in combat, with a softer side he rarely shows.', proactiveMessagingEnabled: true },
+        { id: 'aria-id', name: 'Aria', avatar: 'A', gender: 'Female', age: '24', desc: 'A free-spirited bard who travels the world collecting stories and songs. Witty, charming, and never without her trusty lute.', proactiveMessagingEnabled: true },
       ],
       savedAvatars: ['U', 'L', 'K', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop'],
       chatHistory: {
@@ -945,6 +953,30 @@ export const useNanaStore = create<NanaStore>()(
           isEditingBalance: false,
         });
         return true;
+      },
+
+      setCharacterProactiveMessagingEnabled: (characterId, enabled) => {
+        const now = Date.now();
+        set(state => {
+          if (!state.characters.some(character => character.id === characterId)) return {};
+          return {
+            characters: state.characters.map(character => (
+              character.id === characterId
+                ? { ...character, proactiveMessagingEnabled: enabled }
+                : character
+            )),
+            proactiveChatSchedules: enabled
+              ? {
+                  ...state.proactiveChatSchedules,
+                  [characterId]: rescheduleProactiveAfterInteraction(
+                    state.proactiveChatSchedules[characterId],
+                    characterId,
+                    now,
+                  ),
+                }
+              : state.proactiveChatSchedules,
+          };
+        });
       },
 
       clearChat: (chatId) => {
@@ -1979,7 +2011,11 @@ export const useNanaStore = create<NanaStore>()(
             let changed = false;
             const friendIds = new Set(state.friends);
             for (const character of state.characters) {
-              if (!friendIds.has(character.id) || nextSchedules[character.id]) continue;
+              if (
+                !friendIds.has(character.id)
+                || character.proactiveMessagingEnabled === false
+                || nextSchedules[character.id]
+              ) continue;
               if (!changed) nextSchedules = { ...nextSchedules };
               nextSchedules[character.id] = createInitialProactiveSchedule(character.id, now);
               changed = true;
@@ -2006,12 +2042,47 @@ export const useNanaStore = create<NanaStore>()(
           const originalSchedule = state.proactiveChatSchedules[character.id];
           if (!originalSchedule) return;
           const copy = runtimeCopyFor(state.themeConfig.language);
-          const draft = createLocalProactiveMessage({
+          const focusEvent = selectProactiveFocusEvent(
+            state.relationshipTraces,
+            character.id,
+            originalSchedule,
+            now,
+          );
+          let draft = createLocalProactiveMessage({
             characterId: character.id,
             characterName: character.name,
+            personaDescription: character.desc,
+            recentEventSummary: focusEvent?.summary,
             language: state.themeConfig.language,
             now,
           });
+          if (state.apiKey.trim()) {
+            const activePreset = state.onlinePresets.find(preset => (
+              preset.id === state.activeOnlinePresetId
+            )) || DEFAULT_ONLINE_PRESET;
+            try {
+              const generated = await generateProactiveReply({
+                userName: state.myName,
+                userDesc: state.myDesc,
+                activeChar: character,
+                activePreset,
+                chatHistory: state.chatHistory[character.id] || [],
+                worldBookEntries: state.worldBookEntries,
+                relationshipTraces: state.relationshipTraces,
+                memoryWindowSize: state.memoryWindowSize,
+                activeChatId: character.id,
+                apiUrl: state.apiUrl,
+                apiKey: state.apiKey,
+                selectedModel: state.selectedModel,
+                replaceMacros,
+                language: state.themeConfig.language,
+                focusEvent: focusEvent || undefined,
+              });
+              draft = generated.text;
+            } catch (error) {
+              console.warn('Proactive model generation failed; using local fallback.', error);
+            }
+          }
           const proactiveMessages = splitCharacterReplyIntoMessages(draft);
           if (proactiveMessages.length === 0) return;
           const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
@@ -2043,6 +2114,7 @@ export const useNanaStore = create<NanaStore>()(
                 || Object.keys(current.pendingPaymentReactions).length > 0
                 || current.blockedUsers.includes(character.id)
                 || !current.friends.includes(character.id)
+                || current.characters.find(item => item.id === character.id)?.proactiveMessagingEnabled === false
               ) return {};
 
               didCommit = true;
@@ -2066,6 +2138,7 @@ export const useNanaStore = create<NanaStore>()(
                         liveSchedule,
                         character.id,
                         now,
+                        focusEvent?.id,
                       ),
                     }
                   : current.proactiveChatSchedules,
