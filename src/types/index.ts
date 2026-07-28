@@ -3,6 +3,9 @@ import type { ReactNode } from 'react';
 export type LegacyPaymentMessageType = 'transfer' | 'redpacket' | 'transfer_received' | 'redpacket_received';
 export type MessageType = 'text' | 'voice' | 'image' | 'payment' | LegacyPaymentMessageType | 'system';
 export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type ConversationEmotion = 'neutral' | 'warm' | 'playful' | 'concerned' | 'tense' | 'tender' | 'reflective';
+export type ConversationOpenLoopKind = 'question' | 'promise' | 'plan' | 'concern';
+export type ConversationOpenLoopOwner = 'user' | 'character' | 'shared';
 
 /** @deprecated Persisted V1/UI compatibility. New product code uses ChatReplyPreference. */
 export type ReplyMode = 'auto' | 'text' | 'voice';
@@ -77,6 +80,42 @@ export interface Message {
 }
 
 export type ChatHistory = Record<string, Message[]>;
+
+export interface ConversationTopic {
+  id: string;
+  label: string;
+  sourceTurnId: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface ConversationOpenLoop {
+  id: string;
+  kind: ConversationOpenLoopKind;
+  owner: ConversationOpenLoopOwner;
+  summary: string;
+  sourceTurnId: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface ConversationContinuityState {
+  schemaVersion: 1;
+  characterId: string;
+  emotion: ConversationEmotion;
+  emotionReason?: string;
+  emotionUpdatedAt: number;
+  emotionExpiresAt: number;
+  topics: ConversationTopic[];
+  openLoops: ConversationOpenLoop[];
+  lastTurnId?: string;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export type ConversationContinuityByCharacter = Record<string, ConversationContinuityState>;
 
 export interface ProactiveChatSchedule {
   characterId: string;

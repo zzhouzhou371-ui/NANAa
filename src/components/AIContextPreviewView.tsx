@@ -17,6 +17,7 @@ export function AIContextPreviewView() {
   const chatHistory = useNanaStore(s => s.chatHistory);
   const worldBookEntries = useNanaStore(s => s.worldBookEntries);
   const relationshipTraces = useNanaStore(s => s.relationshipTraces);
+  const conversationContinuityByCharacter = useNanaStore(s => s.conversationContinuityByCharacter);
   const myName = useNanaStore(s => s.myName);
   const myDesc = useNanaStore(s => s.myDesc);
   const lastUserMessage = useNanaStore(s => s.lastUserMessage);
@@ -45,6 +46,7 @@ export function AIContextPreviewView() {
     chatHistory: history,
     worldBookEntries,
     relationshipTraces,
+    conversationContinuity: conversationContinuityByCharacter[charId],
     activeChatId: charId,
     replaceMacros,
   });

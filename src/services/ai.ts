@@ -7,6 +7,7 @@ import type {
   RelationshipTrace,
   PaymentKind,
   PaymentReactionDecision,
+  ConversationContinuityState,
 } from '../types';
 import {
   fetchWithTimeout,
@@ -15,6 +16,12 @@ import {
   responseErrorMessage,
 } from './network';
 import { resolveRuntimeLanguage, runtimeLocalPaymentReply } from './runtimeCopy';
+import {
+  CONTINUITY_ENVELOPE_INSTRUCTION,
+  formatConversationContinuityContext,
+  parseConversationContinuityEnvelope,
+  type ConversationContinuityPatch,
+} from './conversationContinuityRuntime';
 
 type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -157,6 +164,7 @@ interface GenerateParams {
   chatHistory: Message[];
   worldBookEntries: WorldBookEntry[];
   relationshipTraces?: RelationshipTrace[];
+  conversationContinuity?: ConversationContinuityState;
   memoryWindowSize?: number;
   activeChatId: string;
   apiUrl: string;
@@ -168,7 +176,7 @@ interface GenerateParams {
 export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' | 'selectedModel'>): AiContextBuildResult {
   const {
     userText, userName, userDesc, activeChar, activePreset,
-    worldBookEntries, relationshipTraces = [], memoryWindowSize = 12,
+    worldBookEntries, relationshipTraces = [], conversationContinuity, memoryWindowSize = 12,
     activeChatId, replaceMacros,
   } = params;
   const charName = activeChar?.name || 'Character';
@@ -213,6 +221,12 @@ export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' 
       'Never return more than three bubbles.',
     ].join('\n'),
   );
+  appendSection(
+    sections,
+    'Current Conversation Continuity',
+    formatConversationContinuityContext(conversationContinuity),
+  );
+  appendSection(sections, 'Private Continuity Update', CONTINUITY_ENVELOPE_INSTRUCTION);
 
   const matchedLore = worldBookEntries
     .filter(entry => {
@@ -306,10 +320,16 @@ export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' 
   };
 }
 
-export async function generateReply(params: GenerateParams): Promise<{ text: string; loreCount: number }> {
+export interface GenerateReplyResult {
+  text: string;
+  loreCount: number;
+  continuityPatch?: ConversationContinuityPatch;
+}
+
+export async function generateReply(params: GenerateParams): Promise<GenerateReplyResult> {
   const {
     userText, userName, activeChar, activePreset,
-    chatHistory, worldBookEntries, relationshipTraces, memoryWindowSize, activeChatId,
+    chatHistory, worldBookEntries, relationshipTraces, conversationContinuity, memoryWindowSize, activeChatId,
     apiUrl, apiKey, selectedModel, replaceMacros,
   } = params;
   const charName = activeChar?.name || 'Character';
@@ -322,6 +342,7 @@ export async function generateReply(params: GenerateParams): Promise<{ text: str
     chatHistory,
     worldBookEntries,
     relationshipTraces,
+    conversationContinuity,
     memoryWindowSize,
     activeChatId,
     replaceMacros,
@@ -331,17 +352,22 @@ export async function generateReply(params: GenerateParams): Promise<{ text: str
   const modelName = selectedModel || 'gemini-1.5-flash';
 
   if (isOfficialGeminiBaseUrl(baseUrl)) {
-    const text = await postGeminiText({
+    const rawText = await postGeminiText({
       baseUrl,
       model: modelName,
       apiKey,
       text: buildPrompt(context.systemInstruction, chatHistory, userText, userName, charName),
       temperature: 0.8,
     });
-    return { text: text || '(No response)', loreCount: context.loreCount };
+    const parsed = parseConversationContinuityEnvelope(rawText);
+    return {
+      text: parsed.text || '(No response)',
+      loreCount: context.loreCount,
+      ...(parsed.patch ? { continuityPatch: parsed.patch } : {}),
+    };
   }
 
-  const text = await postOpenAICompatible({
+  const rawText = await postOpenAICompatible({
     baseUrl,
     model: modelName,
     apiKey,
@@ -355,7 +381,12 @@ export async function generateReply(params: GenerateParams): Promise<{ text: str
     ],
     temperature: 0.8,
   });
-  return { text: text || '(No response)', loreCount: context.loreCount };
+  const parsed = parseConversationContinuityEnvelope(rawText);
+  return {
+    text: parsed.text || '(No response)',
+    loreCount: context.loreCount,
+    ...(parsed.patch ? { continuityPatch: parsed.patch } : {}),
+  };
 }
 
 interface GenerateProactiveParams extends Omit<GenerateParams, 'userText'> {
@@ -365,7 +396,7 @@ interface GenerateProactiveParams extends Omit<GenerateParams, 'userText'> {
 
 export async function generateProactiveReply(
   params: GenerateProactiveParams,
-): Promise<{ text: string; loreCount: number }> {
+): Promise<GenerateReplyResult> {
   const {
     userName,
     activeChar,
@@ -373,6 +404,7 @@ export async function generateProactiveReply(
     chatHistory,
     worldBookEntries,
     relationshipTraces,
+    conversationContinuity,
     memoryWindowSize,
     activeChatId,
     apiUrl,
@@ -392,6 +424,7 @@ export async function generateProactiveReply(
     chatHistory,
     worldBookEntries,
     relationshipTraces,
+    conversationContinuity,
     memoryWindowSize,
     activeChatId,
     replaceMacros,
@@ -405,7 +438,8 @@ export async function generateProactiveReply(
       : 'There is no new event to follow up. Reach out naturally because the character thought of the user.',
     'Do not invent a real-world event, meeting, action, promise, or memory that is not present in the supplied context.',
     'Do not mention prompts, memory systems, APIs, scheduling, or that this is a proactive task.',
-    'Write one short message most of the time; two or three short bubbles are allowed only when natural, separated by <NANA_MSG>.',
+    'Write one short visible message most of the time; two or three short bubbles are allowed only when natural, separated by <NANA_MSG>.',
+    'After the visible message, include the required private continuity block.',
     isChinese ? 'Write the message in natural Chinese.' : 'Write the message in natural English.',
   ].join('\n');
   const baseUrl = normalizeBaseUrl(apiUrl);
@@ -441,15 +475,20 @@ export async function generateProactiveReply(
         })),
         {
           role: 'user',
-          content: 'Write only the character message that should be sent now.',
+          content: 'Write the character message that should be sent now, followed by the required private continuity block.',
         },
       ],
       temperature: 0.9,
       timeoutMs: 20_000,
     });
   }
-  if (!text.trim()) throw new Error('AI service returned an empty proactive message.');
-  return { text, loreCount: context.loreCount };
+  const parsed = parseConversationContinuityEnvelope(text);
+  if (!parsed.text.trim()) throw new Error('AI service returned an empty proactive message.');
+  return {
+    text: parsed.text,
+    loreCount: context.loreCount,
+    ...(parsed.patch ? { continuityPatch: parsed.patch } : {}),
+  };
 }
 
 function buildPrompt(

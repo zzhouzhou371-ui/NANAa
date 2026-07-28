@@ -95,7 +95,7 @@ const storage = loadTypeScriptModule('src/services/storage.ts', {
   '@react-native-async-storage/async-storage': asyncStorageMock,
   'react-native': { Alert: { alert() {} }, Share: { share: async () => undefined } },
   '../stores/nanaStore': {
-    NANA_PERSIST_VERSION: 8,
+    NANA_PERSIST_VERSION: 9,
     selectNanaPersistedState: state => state,
     useNanaStore: {
       setState() {},

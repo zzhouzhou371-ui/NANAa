@@ -50,6 +50,11 @@ import {
   transitionMessageDelivery,
 } from '../services/messageDeliveryRuntime';
 import {
+  normalizeConversationContinuityMap,
+  selectConversationContinuityFollowUp,
+  updateConversationContinuity,
+} from '../services/conversationContinuityRuntime';
+import {
   createInitialProactiveSchedule,
   createLocalProactiveMessage,
   normalizeProactiveChatSchedules,
@@ -93,7 +98,7 @@ import type {
   WeChatTab, WeChatPage, ChatPanel, IslandNotification,
   CallLog, CallOverlayState, RelationshipTrace,
   ChatReplyPreference, Payment, PaymentKind, PaymentStatus, ReplyMode,
-  ProactiveChatSchedules,
+  ProactiveChatSchedules, ConversationContinuityByCharacter,
 } from '../types';
 
 import { triggerHaptic } from '../utils/haptics';
@@ -511,6 +516,7 @@ export interface NanaStore {
   callLogs: CallLog[];
   relationshipTraces: RelationshipTrace[];
   proactiveChatSchedules: ProactiveChatSchedules;
+  conversationContinuityByCharacter: ConversationContinuityByCharacter;
 
   // Persisted: Memory & Voice
   memoryWindowSize: number;
@@ -624,7 +630,7 @@ export interface NanaStore {
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 8;
+export const NANA_PERSIST_VERSION = 9;
 
 type PersistedStateRecord = Record<string, unknown>;
 
@@ -692,6 +698,9 @@ export function migrateNanaPersistedState(persistedState: unknown): PersistedSta
       : [],
     relationshipTraces: normalizeRelationshipTraces(state.relationshipTraces),
     proactiveChatSchedules: normalizeProactiveChatSchedules(state.proactiveChatSchedules),
+    conversationContinuityByCharacter: normalizeConversationContinuityMap(
+      state.conversationContinuityByCharacter,
+    ),
     memoryWindowSize: typeof state.memoryWindowSize === 'number'
       && Number.isFinite(state.memoryWindowSize)
       ? Math.max(1, Math.min(50, Math.floor(state.memoryWindowSize)))
@@ -737,6 +746,7 @@ export function selectNanaPersistedState(state: NanaStore): PersistedStateRecord
     callLogs: state.callLogs,
     relationshipTraces: state.relationshipTraces,
     proactiveChatSchedules: state.proactiveChatSchedules,
+    conversationContinuityByCharacter: state.conversationContinuityByCharacter,
     memoryWindowSize: state.memoryWindowSize,
     showMemoryDebug: state.showMemoryDebug,
     autoTTS: state.autoTTS,
@@ -796,6 +806,7 @@ export const useNanaStore = create<NanaStore>()(
       callLogs: [],
       relationshipTraces: [],
       proactiveChatSchedules: {},
+      conversationContinuityByCharacter: {},
 
       memoryWindowSize: 10,
       showMemoryDebug: false,
@@ -1133,12 +1144,17 @@ export const useNanaStore = create<NanaStore>()(
             .filter(payment => !preservedIds.has(payment.id))
             .map(payment => createPaymentChatMessage(payment, state.myAvatar));
           const nextPendingChatRequests = cancelChatRequest(state.pendingChatRequests, chatId);
+          const conversationContinuityByCharacter = {
+            ...state.conversationContinuityByCharacter,
+          };
+          delete conversationContinuityByCharacter[chatId];
           return {
             chatHistory: {
               ...state.chatHistory,
               [chatId]: [...preservedMessages, ...recoveredMessages].sort((left, right) => left.id - right.id),
             },
             pendingChatRequests: nextPendingChatRequests,
+            conversationContinuityByCharacter,
             isGenerating: Object.keys(nextPendingChatRequests).length > 0,
             unreadCounts: { ...state.unreadCounts, [chatId]: 0 },
             ...(state.activeChatId === chatId ? {
@@ -2021,6 +2037,7 @@ export const useNanaStore = create<NanaStore>()(
                 chatHistory: state.chatHistory[chatId] || [],
                 worldBookEntries: state.worldBookEntries,
                 relationshipTraces: state.relationshipTraces,
+                conversationContinuity: state.conversationContinuityByCharacter[chatId],
                 memoryWindowSize: state.memoryWindowSize,
                 activeChatId: chatId,
                 apiUrl: state.apiUrl, apiKey: state.apiKey, selectedModel: state.selectedModel, replaceMacros,
@@ -2034,6 +2051,9 @@ export const useNanaStore = create<NanaStore>()(
                 loreCount: 0,
               };
           const { text: rawReplyText, loreCount } = generatedReply;
+          const continuityPatch = 'continuityPatch' in generatedReply
+            ? generatedReply.continuityPatch
+            : undefined;
           const parsedReplyMessages = splitCharacterReplyIntoMessages(rawReplyText);
           const replyMessages = parsedReplyMessages.length > 0
             ? parsedReplyMessages
@@ -2098,6 +2118,7 @@ export const useNanaStore = create<NanaStore>()(
                 : { completed: true, pending: s.pendingChatRequests };
               if (!completion.completed) return {};
               const nextPending = completion.pending;
+              const completedAt = Date.now();
               const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               didCommitMessage = true;
               if (isLastMessage) didCommitAll = true;
@@ -2123,6 +2144,20 @@ export const useNanaStore = create<NanaStore>()(
                       s.proactiveChatSchedules[chatId],
                       chatId,
                       Date.now(),
+                    ),
+                  },
+                  conversationContinuityByCharacter: {
+                    ...s.conversationContinuityByCharacter,
+                    [chatId]: updateConversationContinuity(
+                      s.conversationContinuityByCharacter[chatId],
+                      {
+                        characterId: chatId,
+                        turnId: requestId,
+                        userText,
+                        characterText: normalizedReplyText,
+                        modelPatch: continuityPatch,
+                        now: completedAt,
+                      },
                     ),
                   },
                 } : {}),
@@ -2250,14 +2285,20 @@ export const useNanaStore = create<NanaStore>()(
             originalSchedule,
             now,
           );
+          const continuitySummary = selectConversationContinuityFollowUp(
+            state.conversationContinuityByCharacter[character.id],
+            now,
+          );
           let draft = createLocalProactiveMessage({
             characterId: character.id,
             characterName: character.name,
             personaDescription: character.desc,
             recentEventSummary: focusEvent?.summary,
+            continuitySummary,
             language: state.themeConfig.language,
             now,
           });
+          let continuityPatch: Awaited<ReturnType<typeof generateProactiveReply>>['continuityPatch'];
           if (state.apiKey.trim()) {
             const activePreset = state.onlinePresets.find(preset => (
               preset.id === state.activeOnlinePresetId
@@ -2271,6 +2312,7 @@ export const useNanaStore = create<NanaStore>()(
                 chatHistory: state.chatHistory[character.id] || [],
                 worldBookEntries: state.worldBookEntries,
                 relationshipTraces: state.relationshipTraces,
+                conversationContinuity: state.conversationContinuityByCharacter[character.id],
                 memoryWindowSize: state.memoryWindowSize,
                 activeChatId: character.id,
                 apiUrl: state.apiUrl,
@@ -2281,6 +2323,7 @@ export const useNanaStore = create<NanaStore>()(
                 focusEvent: focusEvent || undefined,
               });
               draft = generated.text;
+              continuityPatch = generated.continuityPatch;
             } catch (error) {
               console.warn('Proactive model generation failed; using local fallback.', error);
             }
@@ -2348,6 +2391,22 @@ export const useNanaStore = create<NanaStore>()(
                   ...current.unreadCounts,
                   [character.id]: unreadAfterRemoteEvent(current, character.id),
                 },
+                ...(isLastMessage ? {
+                  conversationContinuityByCharacter: {
+                    ...current.conversationContinuityByCharacter,
+                    [character.id]: updateConversationContinuity(
+                      current.conversationContinuityByCharacter[character.id],
+                      {
+                        characterId: character.id,
+                        turnId: `proactive:${character.id}:${now}`,
+                        userText: '',
+                        characterText: proactiveMessages.join(' '),
+                        modelPatch: continuityPatch,
+                        now,
+                      },
+                    ),
+                  },
+                } : {}),
               };
             });
             if (!didCommit) return;
@@ -2684,7 +2743,7 @@ export const useNanaStore = create<NanaStore>()(
           }
 
           const activePreset = state.onlinePresets.find(p => p.id === state.activeOnlinePresetId) || DEFAULT_ONLINE_PRESET;
-          const { text: replyText } = await generateReply({
+          const { text: replyText, continuityPatch } = await generateReply({
             userText: transcriptCapture.transcript,
             userName: state.myName,
             userDesc: state.myDesc,
@@ -2693,6 +2752,7 @@ export const useNanaStore = create<NanaStore>()(
             chatHistory: state.chatHistory[activeChatId] || [],
             worldBookEntries: state.worldBookEntries,
             relationshipTraces: state.relationshipTraces,
+            conversationContinuity: state.conversationContinuityByCharacter[activeChatId],
             memoryWindowSize: state.memoryWindowSize,
             activeChatId,
             apiUrl: state.apiUrl,
@@ -2737,6 +2797,19 @@ export const useNanaStore = create<NanaStore>()(
             callOverlay: {
               ...appendCallCaptureResult(s.callOverlay, replyCapture, 'char'),
               speechPhase: 'idle' as const,
+            },
+            conversationContinuityByCharacter: {
+              ...s.conversationContinuityByCharacter,
+              [activeChatId]: updateConversationContinuity(
+                s.conversationContinuityByCharacter[activeChatId],
+                {
+                  characterId: activeChatId,
+                  turnId: `call:${currentOverlay.startedAt || Date.now()}:${currentOverlay.inputEpoch}`,
+                  userText: transcriptCapture.transcript!.trim(),
+                  characterText: replyText,
+                  modelPatch: continuityPatch,
+                },
+              ),
             },
             islandNotification: null,
           }) : ({}));

@@ -253,6 +253,31 @@ Outgoing online messages have a separate durable transport lifecycle in
   `sending`/`sent` transport to `delivered`, but never invent a character read.
   Clearing a chat cancels its remaining in-process delivery timers.
 
+Short-term conversation continuity is deliberately separate from long-term
+memory:
+
+- `src/services/conversationContinuityRuntime.ts` keeps one bounded state per
+  character: an expiring emotional tone, up to three current topics, and up to
+  four unanswered questions, concerns, plans, or promises.
+- Topics expire after 72 hours, emotional tone after 36 hours, and open loops
+  after 14 days. Runtime normalization removes expired or malformed records, so
+  stale conversation state cannot silently become permanent memory.
+- Normal chat, proactive outreach, and model-backed call speech all receive the
+  same current continuity state. A committed response updates it; failed,
+  cancelled, or stale model work cannot.
+- Remote providers append a private `<NANA_CONTINUITY>` JSON envelope to the
+  normal reply, so state extraction uses the same request and adds no second
+  model charge. The envelope is stripped before bubble parsing. Invalid or
+  missing metadata fails closed and the deterministic local extractor supplies
+  a bounded fallback.
+- Continuity prompts explicitly label the state as ephemeral and unverified.
+  Models may use it to continue naturally, but may not cite it as proof that an
+  event happened. Only the existing relationship-trace and memory pipeline can
+  create long-term evidence.
+- Local sandbox replies and proactive fallbacks use the same deterministic
+  state updater without an API key. Clearing a chat also clears its invisible
+  short-term state, while leaving canonical relationship memories untouched.
+
 Proactive online outreach is a durable relationship rhythm, not an unbounded
 background loop:
 

@@ -33,6 +33,7 @@
     "test:chat": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-request-contract.mjs",
     "test:chat-rhythm": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-rhythm-contract.mjs",
     "test:message-delivery": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-message-delivery-contract.mjs",
+    "test:conversation-continuity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-conversation-continuity-contract.mjs",
     "test:proactive-chat": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-proactive-chat-contract.mjs",
     "test:chat-storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-chat-storage-contract.mjs",
     "test:storage": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-storage-contract.mjs",

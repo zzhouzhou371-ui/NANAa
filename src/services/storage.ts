@@ -51,6 +51,7 @@ const RECORD_STATE_FIELDS = new Set([
   'unreadCounts',
   'paymentsById',
   'proactiveChatSchedules',
+  'conversationContinuityByCharacter',
 ]);
 const STRING_STATE_FIELDS = new Set([
   'selectedModel', 'myDesc', 'apiUrl', 'myAvatar', 'myName', 'walletBalance',

@@ -137,6 +137,17 @@ baked interaction layers.
   generation. A failed turn retries the same message IDs, preserving order
   without duplicate bubbles; restart recovery may restore delivery but never
   fabricates a read.
+- Each character now has a separate short-term continuity state for current
+  emotional tone, active topics, and unfinished questions, concerns, plans, or
+  promises. It is bounded, time-expiring, normalized during version-9
+  hydration, included in portable backups, and cleared with the chat without
+  deleting long-term relationship evidence. Chat, proactive outreach, and
+  model-backed calls share it.
+- Remote replies can update continuity through a private structured envelope
+  inside the existing generation request; the metadata is stripped before
+  bubble rendering and malformed output falls back to deterministic local
+  extraction. Simulator chat therefore exercises the same lifecycle without
+  an API key or an extra model request.
 - Online characters now have durable proactive-message schedules. First launch
   only initializes a future due time; chat activity postpones it, successful
   outreach enters a longer per-character cooldown, and a global cooldown stops
@@ -178,7 +189,8 @@ baked interaction layers.
   `test:call-audio-route`, `test:call-voice-activity`, `test:payment`,
   `test:storage`, `test:chat-storage`, `test:trace`, `test:memory-context`,
   `test:memory-correction`, `test:chat`, `test:chat-rhythm`,
-  `test:message-delivery`, and `test:proactive-chat`.
+  `test:message-delivery`, `test:conversation-continuity`, and
+  `test:proactive-chat`.
 - UI smoke: four viewports (390x844, 412x915, 360x800, 320x568), seven core
   screens per viewport, screenshots plus console/page-error and overflow checks.
   The pre-UI-polish regression baseline generated on 2026-07-16 is in
@@ -218,6 +230,11 @@ baked interaction layers.
   recovery, and a dedicated `test:message-delivery` contract. The complete
   360x800 chat, voice, payment, avatar, and call smoke path passes at
   `screenshots/smoke-message-delivery/report.json`.
+- The short-term continuity pass adds version-9 normalized state, bounded
+  topic/open-loop lifetimes, same-request private model patches, local fallback,
+  and shared chat/proactive/call context. Its dedicated
+  `test:conversation-continuity` contract and the complete 360x800 UI path pass
+  at `screenshots/smoke-conversation-continuity/report.json`.
 - The 2026-07-27 phone-chrome/weather pass was rebuilt into the Android
   development client and verified in the emulator for both chrome themes,
   weather permission explanation, Android foreground-location permission,

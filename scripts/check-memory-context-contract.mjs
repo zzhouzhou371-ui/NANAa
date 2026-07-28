@@ -34,6 +34,13 @@ const context = vm.createContext({
         runtimeLocalPaymentReply: () => '',
       };
     }
+    if (request === './conversationContinuityRuntime') {
+      return {
+        CONTINUITY_ENVELOPE_INSTRUCTION: '',
+        formatConversationContinuityContext: () => '',
+        parseConversationContinuityEnvelope: text => ({ text }),
+      };
+    }
     return {};
   },
   Date,

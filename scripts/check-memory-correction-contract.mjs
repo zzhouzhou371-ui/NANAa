@@ -49,6 +49,13 @@ const aiService = loadTypeScriptModule('src/services/ai.ts', (request) => {
       runtimeLocalPaymentReply: () => '',
     };
   }
+  if (request === './conversationContinuityRuntime') {
+    return {
+      CONTINUITY_ENVELOPE_INSTRUCTION: '',
+      formatConversationContinuityContext: () => '',
+      parseConversationContinuityEnvelope: text => ({ text }),
+    };
+  }
   return {};
 });
 

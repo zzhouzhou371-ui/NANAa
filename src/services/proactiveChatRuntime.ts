@@ -179,6 +179,7 @@ interface CreateLocalProactiveMessageInput {
   characterName?: string;
   personaDescription?: string;
   recentEventSummary?: string;
+  continuitySummary?: string;
   language?: string;
   now?: number;
 }
@@ -221,6 +222,7 @@ export const createLocalProactiveMessage = ({
   characterName,
   personaDescription = '',
   recentEventSummary,
+  continuitySummary,
   language,
   now = Date.now(),
 }: CreateLocalProactiveMessageInput): string => {
@@ -235,6 +237,13 @@ export const createLocalProactiveMessage = ({
     return isChinese
       ? `刚刚又想起我们之前的那件事。${CHAT_BUBBLE_SEPARATOR}关于“${excerpt}”，你后来还好吗？`
       : `I was thinking about what happened between us.${CHAT_BUBBLE_SEPARATOR}About “${excerpt}”—how have you been since then?`;
+  }
+
+  if (continuitySummary?.trim()) {
+    const excerpt = conciseExcerpt(continuitySummary, isChinese ? 34 : 76);
+    return isChinese
+      ? `我还记得我们刚才没聊完的事。${CHAT_BUBBLE_SEPARATOR}关于“${excerpt}”，你还想继续说吗？`
+      : `I was still thinking about where we left off.${CHAT_BUBBLE_SEPARATOR}About “${excerpt}”—do you want to keep talking?`;
   }
 
   if (isChinese) {
