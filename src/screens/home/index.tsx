@@ -1,6 +1,6 @@
 import { Alert, BackHandler, Keyboard, Platform, Pressable, StyleSheet, View, Text, ScrollView, useWindowDimensions } from 'react-native';
 import { useEffect, useState, type ReactNode } from 'react';
-import { AnimatePresence, MotiView } from 'moti';
+import { MotiView } from 'moti';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BookOpen,
@@ -52,15 +52,15 @@ import {
 import { palette } from '../../constants/design';
 
 const APPS = [
-  { labelKey: 'wechat', icon: <MessageCircleMore size={22} color="#4B9A82" strokeWidth={2.2} />, colors: ['#FFFFFF', '#D9F0F0'] as [string, string], app: 'wechat', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/wechat-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/wechat.png') },
-  { labelKey: 'worldBook', icon: <BookOpen size={21} color="#557FA9" strokeWidth={2.1} />, colors: ['#FFFFFF', '#D9EEFF'] as [string, string], app: 'worldbook', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/worldbook-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/worldbook.png') },
-  { labelKey: 'presets', icon: <SlidersHorizontal size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: 'presets', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/presets-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/presets.png') },
-  { labelKey: 'settings', icon: <Settings size={22} color="#65738F" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EEF5FB'] as [string, string], app: 'settings', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/settings-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/settings.png') },
-  { labelKey: 'characters', icon: <Users size={21} color="#4F8A98" strokeWidth={2.1} />, colors: ['#FFFFFF', '#D9F0F0'] as [string, string], app: 'characters', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/characters-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-kuromi-v1/characters-kuromi.png') },
-  { labelKey: 'user', icon: <UserRoundPen size={21} color="#B36A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F6DDE7'] as [string, string], app: 'user', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/user-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/user.png') },
-  { labelKey: 'theme', icon: <Palette size={21} color="#6674B0" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: 'theme', systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/theme-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/theme.png') },
-  { labelKey: 'sounds', icon: <Music size={21} color="#9A3B6E" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: null, systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/sounds-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/sounds.png') },
-  { labelKey: 'photos', icon: <Image size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: null, systemAssetPreview: require('../../../assets/generated/nana-app-icons-v3/photos-bright.png'), neumorphicAssetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/photos.png') },
+  { labelKey: 'wechat', icon: <MessageCircleMore size={22} color="#4B9A82" strokeWidth={2.2} />, colors: ['#FFFFFF', '#D9F0F0'] as [string, string], app: 'wechat', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/wechat.png') },
+  { labelKey: 'worldBook', icon: <BookOpen size={21} color="#557FA9" strokeWidth={2.1} />, colors: ['#FFFFFF', '#D9EEFF'] as [string, string], app: 'worldbook', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/worldbook.png') },
+  { labelKey: 'presets', icon: <SlidersHorizontal size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: 'presets', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/presets.png') },
+  { labelKey: 'settings', icon: <Settings size={22} color="#65738F" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EEF5FB'] as [string, string], app: 'settings', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/settings.png') },
+  { labelKey: 'characters', icon: <Users size={21} color="#4F8A98" strokeWidth={2.1} />, colors: ['#FFFFFF', '#D9F0F0'] as [string, string], app: 'characters', assetPreview: require('../../../assets/generated/nana-kuromi-v1/characters-kuromi.png') },
+  { labelKey: 'user', icon: <UserRoundPen size={21} color="#B36A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F6DDE7'] as [string, string], app: 'user', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/user.png') },
+  { labelKey: 'theme', icon: <Palette size={21} color="#6674B0" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: 'theme', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/theme.png') },
+  { labelKey: 'sounds', icon: <Music size={21} color="#9A3B6E" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/sounds.png') },
+  { labelKey: 'photos', icon: <Image size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/photos.png') },
 ];
 
 function AppContent() {
@@ -313,6 +313,7 @@ function AppOverlay() {
     if (activeApp === 'wechat' && weChatPage === 'profile') return t.profile;
     if (activeApp === 'wechat' && weChatPage === 'context') return t.aiContext;
     if (activeApp === 'wechat' && weChatPage === 'moments') return t.moments;
+    if (activeApp === 'wechat' && weChatPage === 'stickers') return t.stickers;
     if (activeApp === 'wechat' && weChatPage === 'wallet') return t.wallet;
     if (activeApp === 'wechat') {
       if (weChatTab === 'contacts') return t.contacts;
@@ -548,23 +549,21 @@ function AppOverlay() {
     </MotiView>
   );
 
+  if (!activeApp) return null;
+
   return (
-    <AnimatePresence>
-      {activeApp && (
-        <MotiView
-          from={{ opacity: 0, translateY: 10 }}
-          animate={{ opacity: 1, translateY: 0 }}
-          exit={{ opacity: 0, translateY: 10 }}
-          transition={{ type: 'timing', duration: 220 }}
-          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }}
-        >
-          <View style={{ flex: 1 }}>
-            <SkyScene variant="app" />
-            {content}
-          </View>
-        </MotiView>
-      )}
-    </AnimatePresence>
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }}>
+      <View style={{ flex: 1 }}>
+        <View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFillObject,
+            { backgroundColor: 'rgba(7, 12, 29, 0.14)' },
+          ]}
+        />
+        {content}
+      </View>
+    </View>
   );
 }
 
@@ -575,7 +574,6 @@ function AmbientBackground({ overrideHour }: { overrideHour?: number | null }) {
 export default function HomeScreen() {
   const { t } = useApp();
   const activeApp = useNanaStore(s => s.activeApp);
-  const iconStyle = useNanaStore(s => s.themeConfig.iconStyle);
   const chromeStyle = useNanaStore(s => s.themeConfig.chromeStyle);
   const set = useNanaStore.setState;
   const insets = useSafeAreaInsets();
@@ -598,75 +596,73 @@ export default function HomeScreen() {
         >
           <AmbientBackground />
         </ThickGlassBackdropTarget>
-      <MotiView
-        aria-hidden={activeApp ? true : undefined}
-        accessibilityElementsHidden={!!activeApp}
-        importantForAccessibility={activeApp ? 'no-hide-descendants' : 'auto'}
-        from={{ paddingTop: homeTopPadding }}
-        animate={{ paddingTop: homeTopPadding }}
-        transition={reduceMotionEnabled
-          ? { type: 'timing', duration: 100 }
-          : { type: 'spring', damping: 24, stiffness: 245, mass: 0.8 }}
-        style={{ flex: 1, alignItems: 'center', paddingBottom: insets.bottom + 12 }}
-      >
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ width: contentWidth, flexGrow: 1, paddingBottom: compactHeight ? 6 : 18 }}
-        >
-          <View style={{ marginTop: 2 }}>
-            <HomeWeatherWidget compact={compactGrid} />
-          </View>
-
-          <View
-            style={{
-              marginTop: compactGrid ? 8 : 20,
-              flexDirection: 'row',
-              flexWrap: 'wrap',
-              justifyContent: 'center',
-              rowGap: compactGrid ? 7 : 26,
-              columnGap: compactGrid ? 10 : 28,
-              alignSelf: 'center',
-              width: '100%',
-            }}
+        {!activeApp ? (
+          <MotiView
+            from={{ paddingTop: homeTopPadding }}
+            animate={{ paddingTop: homeTopPadding }}
+            transition={reduceMotionEnabled
+              ? { type: 'timing', duration: 100 }
+              : { type: 'spring', damping: 24, stiffness: 245, mass: 0.8 }}
+            style={{ flex: 1, alignItems: 'center', paddingBottom: insets.bottom + 12 }}
           >
-            {APPS.map((app) => {
-              const label = t[app.labelKey as keyof typeof t];
-              return <AppGridIcon
-                key={`${app.app}-${app.labelKey}`}
-                label={label}
-                icon={app.icon}
-                colors={app.colors}
-                assetPreview={iconStyle === 'neumorphic-v1' ? app.neumorphicAssetPreview : app.systemAssetPreview}
-                compact={compactGrid}
-                disabled={!app.app}
-                comingSoonLabel={t.comingSoon}
-                onPress={() => {
-                  triggerHaptic('light');
-                  if (!app.app) {
-                    set({
-                      islandNotification: {
-                        title: label,
-                        desc: t.comingSoon,
-                        status: 'processing',
-                      },
-                    });
-                    setTimeout(() => useNanaStore.setState({ islandNotification: null }), 1600);
-                    return;
-                  }
-                  useNanaStore.getState().setActiveApp(app.app);
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ width: contentWidth, flexGrow: 1, paddingBottom: compactHeight ? 6 : 18 }}
+            >
+              <View style={{ marginTop: 2 }}>
+                <HomeWeatherWidget compact={compactGrid} />
+              </View>
+
+              <View
+                style={{
+                  marginTop: compactGrid ? 8 : 20,
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  rowGap: compactGrid ? 7 : 26,
+                  columnGap: compactGrid ? 10 : 28,
+                  alignSelf: 'center',
+                  width: '100%',
                 }}
-              />;
-            })}
-          </View>
+              >
+                {APPS.map((app) => {
+                  const label = t[app.labelKey as keyof typeof t];
+                  return <AppGridIcon
+                    key={`${app.app}-${app.labelKey}`}
+                    label={label}
+                    icon={app.icon}
+                    colors={app.colors}
+                    assetPreview={app.assetPreview}
+                    compact={compactGrid}
+                    disabled={!app.app}
+                    comingSoonLabel={t.comingSoon}
+                    onPress={() => {
+                      triggerHaptic('light');
+                      if (!app.app) {
+                        set({
+                          islandNotification: {
+                            title: label,
+                            desc: t.comingSoon,
+                            status: 'processing',
+                          },
+                        });
+                        setTimeout(() => useNanaStore.setState({ islandNotification: null }), 1600);
+                        return;
+                      }
+                      useNanaStore.getState().setActiveApp(app.app);
+                    }}
+                  />;
+                })}
+              </View>
 
-          <View style={{ flex: 1, minHeight: compactGrid ? 8 : 70 }} />
+              <View style={{ flex: 1, minHeight: compactGrid ? 8 : 70 }} />
+            </ScrollView>
 
-        </ScrollView>
-
-        <View style={{ width: Math.min(contentWidth, 316), marginBottom: 2 }}>
-          <BottomDock compact={compactHeight} />
-        </View>
-      </MotiView>
+            <View style={{ width: Math.min(contentWidth, 316), marginBottom: 2 }}>
+              <BottomDock compact={compactHeight} />
+            </View>
+          </MotiView>
+        ) : null}
 
         <AppOverlay />
       </View>

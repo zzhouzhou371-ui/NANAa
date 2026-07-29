@@ -335,7 +335,10 @@ export function ChatView() {
           maintainVisibleContentPosition={{
             startRenderingFromBottom: true,
             autoscrollToBottomThreshold: 0.2,
-            animateAutoScrollToBottom: true,
+            // The first frame should already be the newest message. Animating
+            // FlashList's initial correction makes long chats visibly sweep
+            // down from older messages on Android.
+            animateAutoScrollToBottom: false,
           }}
           onLoad={() => {
             if (!activeChatId) return;

@@ -4,21 +4,30 @@ import { Platform } from 'react-native';
 
 export const NANA_ROOT_STORAGE_KEY = 'nana-root';
 export const API_KEY_SECRET_KEY = 'nana.api-key';
+export const VOICE_API_KEY_SECRET_KEY = 'nana.voice-api-key';
 export const MAX_API_KEY_LENGTH = 2048;
 
-const SECRET_FIELD_NAMES = new Set(['apikey', 'tempapikey']);
+const SECRET_FIELD_NAMES = new Set([
+  'apikey',
+  'tempapikey',
+  'voiceapikey',
+  'tempvoiceapikey',
+]);
 
 type JsonRecord = Record<string, unknown>;
 
 export interface ApiKeyHydrationResult {
   apiKey: string;
+  voiceApiKey: string;
   migratedLegacyKey: boolean;
+  migratedLegacyVoiceKey: boolean;
   storage: 'secure-store' | 'session-memory';
 }
 
 export interface SanitizedPersistedRoot {
   value: JsonRecord;
   legacyApiKey: string;
+  legacyVoiceApiKey: string;
   changed: boolean;
 }
 
@@ -50,11 +59,15 @@ export function sanitizePersistedRootValue(value: unknown): SanitizedPersistedRo
 
   const state = isRecord(value.state) ? value.state : undefined;
   const legacyApiKey = typeof state?.apiKey === 'string' ? state.apiKey.trim() : '';
+  const legacyVoiceApiKey = typeof state?.voiceApiKey === 'string'
+    ? state.voiceApiKey.trim()
+    : '';
   const sanitized = redactSecrets(value);
 
   return {
     value: sanitized,
     legacyApiKey,
+    legacyVoiceApiKey,
     changed: JSON.stringify(sanitized) !== JSON.stringify(value),
   };
 }
@@ -98,6 +111,24 @@ export async function saveApiKey(apiKey: string): Promise<string> {
   }
 }
 
+export async function saveVoiceApiKey(apiKey: string): Promise<string> {
+  const normalized = normalizeApiKey(apiKey);
+  if (!usesNativeSecretStorage()) return normalized;
+
+  try {
+    if (!normalized) {
+      await SecureStore.deleteItemAsync(VOICE_API_KEY_SECRET_KEY);
+      return '';
+    }
+    await SecureStore.setItemAsync(VOICE_API_KEY_SECRET_KEY, normalized, {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+    return normalized;
+  } catch {
+    throw new Error('Nana could not save the voice API Key securely. Your previous key is unchanged; please retry.');
+  }
+}
+
 export async function loadApiKey(): Promise<string> {
   if (!usesNativeSecretStorage()) return '';
 
@@ -105,6 +136,16 @@ export async function loadApiKey(): Promise<string> {
     return (await SecureStore.getItemAsync(API_KEY_SECRET_KEY))?.trim() || '';
   } catch {
     throw new Error('Nana could not read the securely stored API Key. Please retry.');
+  }
+}
+
+export async function loadVoiceApiKey(): Promise<string> {
+  if (!usesNativeSecretStorage()) return '';
+
+  try {
+    return (await SecureStore.getItemAsync(VOICE_API_KEY_SECRET_KEY))?.trim() || '';
+  } catch {
+    throw new Error('Nana could not read the securely stored voice API Key. Please retry.');
   }
 }
 
@@ -118,6 +159,16 @@ export async function clearApiKey(): Promise<void> {
   }
 }
 
+export async function clearVoiceApiKey(): Promise<void> {
+  if (!usesNativeSecretStorage()) return;
+
+  try {
+    await SecureStore.deleteItemAsync(VOICE_API_KEY_SECRET_KEY);
+  } catch {
+    throw new Error('Nana could not clear the securely stored voice API Key. Please retry.');
+  }
+}
+
 /**
  * Runs before Zustand hydration. A legacy key is removed from AsyncStorage only
  * after its SecureStore write succeeds. On web, the key is returned for this
@@ -126,12 +177,16 @@ export async function clearApiKey(): Promise<void> {
 export async function prepareApiKeyForHydration(): Promise<ApiKeyHydrationResult> {
   const raw = await AsyncStorage.getItem(NANA_ROOT_STORAGE_KEY);
   let legacyApiKey = '';
+  let legacyVoiceApiKey = '';
   let migratedLegacyKey = false;
+  let migratedLegacyVoiceKey = false;
   let nativeApiKey = usesNativeSecretStorage() ? await loadApiKey() : '';
+  let nativeVoiceApiKey = usesNativeSecretStorage() ? await loadVoiceApiKey() : '';
 
   if (raw) {
     const sanitized = sanitizePersistedRootJson(raw);
     legacyApiKey = sanitized.legacyApiKey;
+    legacyVoiceApiKey = sanitized.legacyVoiceApiKey;
 
     // A key already present in SecureStore is authoritative. This avoids a
     // stale legacy AsyncStorage value overwriting a newer securely saved key
@@ -139,6 +194,10 @@ export async function prepareApiKeyForHydration(): Promise<ApiKeyHydrationResult
     if (legacyApiKey && usesNativeSecretStorage() && !nativeApiKey) {
       nativeApiKey = await saveApiKey(legacyApiKey);
       migratedLegacyKey = true;
+    }
+    if (legacyVoiceApiKey && usesNativeSecretStorage() && !nativeVoiceApiKey) {
+      nativeVoiceApiKey = await saveVoiceApiKey(legacyVoiceApiKey);
+      migratedLegacyVoiceKey = true;
     }
 
     if (sanitized.changed) {
@@ -148,7 +207,9 @@ export async function prepareApiKeyForHydration(): Promise<ApiKeyHydrationResult
 
   return {
     apiKey: usesNativeSecretStorage() ? nativeApiKey : legacyApiKey,
+    voiceApiKey: usesNativeSecretStorage() ? nativeVoiceApiKey : legacyVoiceApiKey,
     migratedLegacyKey,
+    migratedLegacyVoiceKey,
     storage: usesNativeSecretStorage() ? 'secure-store' : 'session-memory',
   };
 }

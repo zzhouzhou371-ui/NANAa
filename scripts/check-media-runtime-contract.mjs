@@ -297,7 +297,7 @@ if (typeof mediaRuntime.createCharacterVoiceReplyDraft === 'function') {
   expect(voiceReply?.transcript === 'I can send this as voice.', 'voice reply draft should preserve reply text');
 
   const textOnly = mediaRuntime.createCharacterVoiceReplyDraft({ ...luna, supportsVoiceReply: false }, 'Text only.', 'voice');
-  expect(textOnly?.type === 'voice', 'device speech fallback should allow a voice draft even without a custom voice profile');
+  expect(textOnly === null, 'a character with voice replies disabled must remain text-only');
 }
 
 const voiceType = mediaRuntime.resolveCharacterReplyType(luna, 'auto', 'voice');

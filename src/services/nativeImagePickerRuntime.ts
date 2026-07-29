@@ -61,6 +61,23 @@ export interface RecoveredImagePickerSelection {
   result: PhotoPickerResult | AvatarPickerResult;
 }
 
+export interface PickedStickerAsset {
+  uri: string;
+  name: string;
+  mimeType: string;
+  animated: boolean;
+  width: number;
+  height: number;
+  fileSize?: number;
+}
+
+export interface StickerPickerResult {
+  canceled: boolean;
+  assets: PickedStickerAsset[];
+  rejectedCount: number;
+  errorMessage?: string;
+}
+
 export interface CharacterAvatarStateSlice {
   characters: Character[];
   chatHistory: ChatHistory;
@@ -242,6 +259,72 @@ const launchPicker = async (source: PhotoPickerSource): Promise<PhotoPickerResul
 export const pickPhotoFromLibrary = () => launchPicker('library');
 
 export const takePhotoWithSystemCamera = () => launchPicker('camera');
+
+const isAnimatedStickerAsset = (asset: ImagePicker.ImagePickerAsset) => {
+  const mimeType = asset.mimeType?.toLowerCase() || '';
+  const fileName = asset.fileName?.toLowerCase() || '';
+  return mimeType === 'image/gif'
+    || mimeType === 'image/apng'
+    || mimeType === 'image/webp'
+    || /\.(gif|apng|webp)$/.test(fileName);
+};
+
+/**
+ * Keep the original asset so Android animated GIFs do not collapse to their
+ * first frame. Sticker files are promoted into Nana's durable document area
+ * before the result is returned to persisted state.
+ */
+export const pickStickersFromLibrary = async (): Promise<StickerPickerResult> => {
+  try {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      quality: 1,
+      selectionLimit: 24,
+      base64: false,
+      exif: false,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      shouldDownloadFromNetwork: true,
+    });
+    if (result.canceled) return { canceled: true, assets: [], rejectedCount: 0 };
+
+    let rejectedCount = 0;
+    const assets = result.assets.flatMap((asset): PickedStickerAsset[] => {
+      if (asset.type && asset.type !== 'image') {
+        rejectedCount += 1;
+        return [];
+      }
+      if (typeof asset.fileSize === 'number' && asset.fileSize > 8 * 1024 * 1024) {
+        rejectedCount += 1;
+        return [];
+      }
+      try {
+        const extension = safeExtension(asset);
+        return [{
+          uri: finalizeLocalMediaFile(asset.uri, 'stickers', extension),
+          name: asset.fileName?.replace(/\.[^.]+$/, '').trim() || 'Sticker',
+          mimeType: asset.mimeType || `image/${extension}`,
+          animated: isAnimatedStickerAsset(asset),
+          width: asset.width,
+          height: asset.height,
+          fileSize: asset.fileSize,
+        }];
+      } catch {
+        rejectedCount += 1;
+        return [];
+      }
+    });
+    return { canceled: false, assets, rejectedCount };
+  } catch (error) {
+    return {
+      canceled: false,
+      assets: [],
+      rejectedCount: 0,
+      errorMessage: error instanceof Error ? error.message : 'Sticker selection failed',
+    };
+  }
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)

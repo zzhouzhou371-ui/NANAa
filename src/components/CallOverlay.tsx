@@ -40,8 +40,6 @@ import {
 } from '../services/nativeCallAudioRouteRuntime';
 import { NativeSelfCameraPreview } from '../services/nativeCameraRuntime';
 import { NativeVideoPersonaView } from '../services/nativeVideoRuntime';
-import { stopOneShotAudioPlayback } from '../services/nativeAudioPlaybackRuntime';
-import { stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
 import type { MediaCaptureResult } from '../services/mediaRuntime';
 import { useNanaStore } from '../stores/nanaStore';
 import { triggerHaptic } from '../utils/haptics';
@@ -309,16 +307,7 @@ export function CallOverlay() {
   const invalidateCallInput = () => {
     const current = useNanaStore.getState().callOverlay;
     if (!current.show || current.startedAt !== callStartedAtRef.current) return;
-    useNanaStore.setState({
-      callOverlay: {
-        ...current,
-        inputEpoch: current.inputEpoch + 1,
-        speechPhase: current.status === 'connected' ? 'idle' : current.speechPhase,
-        errorMessage: undefined,
-      },
-    });
-    stopOneShotAudioPlayback();
-    void stopSpeechSynthesis();
+    useNanaStore.getState().invalidateActiveCallVoiceInput(callStartedAtRef.current);
   };
   invalidateCallInputRef.current = invalidateCallInput;
 
@@ -488,7 +477,7 @@ export function CallOverlay() {
   }, [callOverlay.connectedAt, callOverlay.durationSec, isConnected]);
 
   useEffect(() => {
-    if (!isConnected) return undefined;
+    if (!isConnected || !isAppActive) return undefined;
     let current = true;
     setAudioRoutePending(nativeRouteAvailable);
     void beginNativeCallAudioSession('speaker').then(result => {
@@ -505,7 +494,7 @@ export function CallOverlay() {
       current = false;
       void endNativeCallAudioSession();
     };
-  }, [callOverlay.startedAt, isConnected, nativeRouteAvailable, t.callAudioRouteFailed]);
+  }, [callOverlay.startedAt, isAppActive, isConnected, nativeRouteAvailable, t.callAudioRouteFailed]);
 
   useEffect(() => {
     const shouldListen = isConnected
@@ -541,7 +530,7 @@ export function CallOverlay() {
         voiceActivityRef.current = null;
         void restartSegmentRef.current();
       }
-    }, 200);
+    }, 250);
     return () => clearInterval(timer);
   }, [isNativeAvailable]);
 

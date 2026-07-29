@@ -62,6 +62,6 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   customThemeColor: '',
   customTextColor: '',
   language: 'en',
-  iconStyle: 'system',
-  chromeStyle: 'system',
+  iconStyle: 'neumorphic-v1',
+  chromeStyle: 'neumorphic-v1',
 };

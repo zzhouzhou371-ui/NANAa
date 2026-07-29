@@ -41,17 +41,12 @@ export const WALLPAPER_OPTIONS: readonly WallpaperDefinition[] = [
 
 export const ICON_PACK_OPTIONS: readonly IconPackDefinition[] = [
   {
-    id: 'system',
-    previewSource: require('../../assets/generated/nana-app-icons-v3/master.png'),
-  },
-  {
     id: 'neumorphic-v1',
     previewSource: require('../../assets/generated/nana-neumorphic-icons-v1/master-kuromi.png'),
   },
 ] as const;
 
 export const CHROME_STYLE_OPTIONS: readonly ChromeStyleDefinition[] = [
-  { id: 'system' },
   { id: 'neumorphic-v1' },
 ] as const;
 

@@ -420,6 +420,7 @@ export const resolveCharacterReplyType = (
   sourceType: MessageType,
 ): MessageType => {
   const capabilities = getCharacterMediaCapabilities(character);
+  if (character?.supportsVoiceReply !== true) return 'text';
   if (!capabilities.canSynthesizeVoice) return 'text';
   if (replyMode === 'voice') return 'voice';
   if (replyMode === 'text') return 'text';

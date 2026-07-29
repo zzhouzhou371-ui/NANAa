@@ -69,6 +69,7 @@ async function postGeminiText(params: {
   text: string;
   temperature: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const response = await fetchWithTimeout(`${params.baseUrl}/v1beta/models/${params.model}:generateContent?key=${params.apiKey.trim()}`, {
     method: 'POST',
@@ -77,6 +78,7 @@ async function postGeminiText(params: {
       contents: [{ parts: [{ text: params.text }] }],
       generationConfig: { temperature: params.temperature },
     }),
+    signal: params.signal,
   }, params.timeoutMs);
   const payload = await readResponsePayload(response);
   if (!response.ok) throw new Error(responseErrorMessage(response, payload));
@@ -92,6 +94,7 @@ async function postOpenAICompatible(params: {
   messages: { role: ChatRole; content: string }[];
   temperature: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const response = await fetchWithTimeout(openAIChatCompletionsUrl(params.baseUrl), {
     method: 'POST',
@@ -104,6 +107,7 @@ async function postOpenAICompatible(params: {
       messages: params.messages,
       temperature: params.temperature,
     }),
+    signal: params.signal,
   }, params.timeoutMs);
   const payload = await readResponsePayload(response);
   if (!response.ok) throw new Error(responseErrorMessage(response, payload));
@@ -171,6 +175,7 @@ interface GenerateParams {
   apiKey: string;
   selectedModel: string;
   replaceMacros: (text: string, userName: string, charName: string, persona: string) => string;
+  signal?: AbortSignal;
 }
 
 export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' | 'selectedModel'>): AiContextBuildResult {
@@ -358,6 +363,7 @@ export async function generateReply(params: GenerateParams): Promise<GenerateRep
       apiKey,
       text: buildPrompt(context.systemInstruction, chatHistory, userText, userName, charName),
       temperature: 0.8,
+      signal: params.signal,
     });
     const parsed = parseConversationContinuityEnvelope(rawText);
     return {
@@ -380,6 +386,7 @@ export async function generateReply(params: GenerateParams): Promise<GenerateRep
       { role: 'user', content: userText },
     ],
     temperature: 0.8,
+    signal: params.signal,
   });
   const parsed = parseConversationContinuityEnvelope(rawText);
   return {
@@ -489,6 +496,98 @@ export async function generateProactiveReply(
     loreCount: context.loreCount,
     ...(parsed.patch ? { continuityPatch: parsed.patch } : {}),
   };
+}
+
+export interface GenerateMomentPostParams {
+  character: Character;
+  userName: string;
+  recentChat: Message[];
+  relationshipTraces: RelationshipTrace[];
+  focusEvent?: RelationshipTrace;
+  language: string;
+  apiUrl: string;
+  apiKey: string;
+  selectedModel: string;
+}
+
+export async function generateMomentPost(params: GenerateMomentPostParams): Promise<string> {
+  const isChinese = params.language.toLowerCase().startsWith('zh');
+  const recentChat = activeTextMessages(params.recentChat)
+    .slice(-8)
+    .map(message => `${message.sender === 'user' ? params.userName : params.character.name}: ${message.text}`)
+    .join('\n');
+  const recentTraces = params.relationshipTraces
+    .filter(trace => (
+      trace.characterId === params.character.id
+      && trace.state === 'digested'
+      && trace.remember
+    ))
+    .sort((left, right) => right.occurredAt - left.occurredAt)
+    .slice(0, 5)
+    .map(trace => trace.summary)
+    .join('\n');
+  const systemInstruction = [
+    `Write one short social feed post as ${params.character.name}.`,
+    `Character: ${params.character.desc}`,
+    'Stay consistent with the character and the supplied real context.',
+    'Never invent a shared meeting, promise, purchase, photo, or event that is not in the context.',
+    'Do not mention prompts, models, memory systems, scheduling, or the user unless it is natural and supported.',
+    'Return only the visible post text, without Markdown, quotes, hashtags, or private notes.',
+    isChinese ? 'Use natural Chinese and keep it within 80 Chinese characters.' : 'Use natural language and keep it under 180 characters.',
+  ].join('\n');
+  const userPrompt = [
+    params.focusEvent ? `Optional real event focus: ${params.focusEvent.summary}` : '',
+    recentTraces ? `Recent relationship context:\n${recentTraces}` : '',
+    recentChat ? `Recent chat:\n${recentChat}` : '',
+    'Write the post now.',
+  ].filter(Boolean).join('\n\n');
+  const result = await runSinglePrompt({
+    apiUrl: params.apiUrl,
+    apiKey: params.apiKey,
+    selectedModel: params.selectedModel,
+    systemInstruction,
+    userPrompt,
+    temperature: 0.85,
+    timeoutMs: 20_000,
+  });
+  const normalized = result.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  if (!normalized) throw new Error('AI service returned an empty moment post.');
+  return normalized.slice(0, isChinese ? 160 : 240);
+}
+
+export interface GenerateMomentCommentParams {
+  character: Character;
+  userName: string;
+  momentText: string;
+  replyToText?: string;
+  language: string;
+  apiUrl: string;
+  apiKey: string;
+  selectedModel: string;
+}
+
+export async function generateMomentComment(params: GenerateMomentCommentParams): Promise<string> {
+  const isChinese = params.language.toLowerCase().startsWith('zh');
+  const result = await runSinglePrompt({
+    apiUrl: params.apiUrl,
+    apiKey: params.apiKey,
+    selectedModel: params.selectedModel,
+    systemInstruction: [
+      `Reply as ${params.character.name}. Character: ${params.character.desc}`,
+      'Write one brief, natural comment for a private friends feed.',
+      'Do not invent events or shared memories. Return visible comment text only.',
+      isChinese ? 'Use natural Chinese, within 45 Chinese characters.' : 'Keep it under 100 characters.',
+    ].join('\n'),
+    userPrompt: [
+      `${params.userName}'s post: ${params.momentText}`,
+      params.replyToText ? `Comment being replied to: ${params.replyToText}` : '',
+    ].filter(Boolean).join('\n'),
+    temperature: 0.75,
+    timeoutMs: 16_000,
+  });
+  const normalized = result.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  if (!normalized) throw new Error('AI service returned an empty moment comment.');
+  return normalized.slice(0, isChinese ? 90 : 140);
 }
 
 function buildPrompt(
@@ -707,6 +806,8 @@ export interface GeneratePaymentReactionParams {
   apiKey: string;
   selectedModel: string;
   language?: string;
+  recentChat?: Message[];
+  relationshipTraces?: RelationshipTrace[];
   timeoutMs?: number;
 }
 
@@ -717,16 +818,25 @@ const conciseText = (value: unknown, maxLength = 280) => (
 function localPaymentReaction(params: GeneratePaymentReactionParams): PaymentReactionResult {
   const name = params.character?.name || 'Character';
   const description = `${params.character?.desc || ''} ${params.character?.gender || ''}`.toLowerCase();
-  const tone = /stoic|quiet|disciplined|reserved|cold/.test(description)
+  const tone = /stoic|quiet|disciplined|reserved|cold|克制|安静|冷静|寡言/.test(description)
     ? 'reserved'
-    : /witty|free-spirited|bard|playful|cheerful/.test(description)
+    : /witty|free-spirited|bard|playful|cheerful|俏皮|活泼|幽默|开朗/.test(description)
       ? 'playful'
-      : /gentle|caring|soft|kind|loyal/.test(description)
+      : /gentle|caring|soft|kind|loyal|温柔|体贴|善良|忠诚/.test(description)
         ? 'gentle'
         : 'default';
-  const replyText = runtimeLocalPaymentReply(params.language, tone, params.kind, name);
+  const note = params.note?.toLowerCase() || '';
+  const guardedPersona = /proud|independent|cautious|suspicious|strict|不收|独立|谨慎|警惕|要强/.test(description);
+  const boundaryNote = /loan|debt|owe|repay|借|欠|还钱|补偿/.test(note);
+  const unusuallyLarge = params.amountMinor >= (params.kind === 'redPacket' ? 20_000 : 50_000);
+  const decision: PaymentReactionDecision = boundaryNote
+    || params.amountMinor >= 100_000
+    || (guardedPersona && unusuallyLarge)
+    ? 'decline'
+    : 'accept';
+  const replyText = runtimeLocalPaymentReply(params.language, tone, params.kind, name, decision);
 
-  return { decision: 'accept', replyText, source: 'local' };
+  return { decision, replyText, source: 'local' };
 }
 
 function parsePaymentReaction(text: string): Omit<PaymentReactionResult, 'source'> {
@@ -770,6 +880,7 @@ export async function generatePaymentReaction(
     `You decide how ${characterName} responds to a relationship payment inside a fictional private-phone role-play.`,
     'Stay in character. Return exactly one JSON object and no Markdown.',
     'Schema: {"decision":"accept|decline","replyText":"one short in-character message","reason":"optional short internal reason"}.',
+    'The character may accept or decline. Decide from their personality, the amount, the note, and supplied relationship context; do not default to accepting.',
     'Do not claim a real bank transfer happened. Do not invent a different amount.',
     resolveRuntimeLanguage(params.language) === 'zh'
       ? 'Write replyText in natural Simplified Chinese.'
@@ -782,16 +893,51 @@ export async function generatePaymentReaction(
     `Object: ${params.kind === 'redPacket' ? 'red packet' : 'transfer'}`,
     `Amount: ${amount}`,
     `Note: ${params.note?.trim() || '(none)'}`,
-  ].join('\n');
+    params.recentChat?.length
+      ? `Recent chat:\n${activeTextMessages(params.recentChat).slice(-6).map(message => (
+          `${message.sender === 'user' ? params.userName || 'User' : characterName}: ${message.text}`
+        )).join('\n')}`
+      : '',
+    params.relationshipTraces?.length
+      ? `Recent real relationship context:\n${params.relationshipTraces
+          .filter(trace => trace.characterId === params.character?.id && trace.state === 'digested')
+          .sort((left, right) => right.occurredAt - left.occurredAt)
+          .slice(0, 3)
+          .map(trace => trace.summary)
+          .join('\n')}`
+      : '',
+  ].filter(Boolean).join('\n');
 
-  const raw = await runSinglePrompt({
-    apiUrl: params.apiUrl,
-    apiKey: params.apiKey,
-    selectedModel: params.selectedModel,
-    systemInstruction,
-    userPrompt,
-    temperature: 0.55,
-    timeoutMs: params.timeoutMs ?? 8_000,
-  });
-  return { ...parsePaymentReaction(raw), source: 'remote' };
+  try {
+    const raw = await runSinglePrompt({
+      apiUrl: params.apiUrl,
+      apiKey: params.apiKey,
+      selectedModel: params.selectedModel,
+      systemInstruction,
+      userPrompt,
+      temperature: 0.55,
+      timeoutMs: params.timeoutMs ?? 20_000,
+    });
+    try {
+      return { ...parsePaymentReaction(raw), source: 'remote' };
+    } catch {
+      const visibleReply = conciseText(
+        raw
+          .replace(/```(?:json)?/gi, '')
+          .replace(/```/g, '')
+          .replace(/\{[\s\S]*\}/g, '')
+          .trim(),
+      );
+      if (visibleReply) {
+        return { decision: 'accept', replyText: visibleReply, source: 'remote' };
+      }
+      throw new Error('The character payment response was empty.');
+    }
+  } catch {
+    // A relationship action must never turn into silence because a provider
+    // timed out or ignored the structured-output request. The durable payment
+    // still settles through the normal store path with a short in-character
+    // local response.
+    return localPaymentReaction(params);
+  }
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 export type LegacyPaymentMessageType = 'transfer' | 'redpacket' | 'transfer_received' | 'redpacket_received';
-export type MessageType = 'text' | 'voice' | 'image' | 'payment' | LegacyPaymentMessageType | 'system';
+export type MessageType = 'text' | 'voice' | 'image' | 'sticker' | 'payment' | LegacyPaymentMessageType | 'system';
 export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 export type ConversationEmotion = 'neutral' | 'warm' | 'playful' | 'concerned' | 'tense' | 'tender' | 'reflective';
 export type ConversationOpenLoopKind = 'question' | 'promise' | 'plan' | 'concern';
@@ -63,6 +63,9 @@ export interface Message {
   imageUri?: string;
   imageWidth?: number;
   imageHeight?: number;
+  stickerId?: string;
+  stickerUri?: string;
+  stickerName?: string;
   replyMode?: ReplyMode;
   paymentId?: string;
   generationSource?: 'remote' | 'localSandbox' | 'proactive';
@@ -143,6 +146,8 @@ export interface Character {
   supportsVideoPersona?: boolean;
   videoPersonaAsset?: string;
   proactiveMessagingEnabled?: boolean;
+  proactiveMomentsMode?: ProactiveMomentsMode;
+  autonomousImageSharingEnabled?: boolean;
 }
 
 export type WallpaperId =
@@ -255,6 +260,26 @@ export interface WorldBookEntry {
   summaryInvalidatedByTraceId?: string;
 }
 
+export type ProactiveMomentsMode = 'off' | 'occasional' | 'normal';
+
+export interface MomentLike {
+  authorId: string;
+  authorName: string;
+  avatar: string;
+  timestamp: number;
+}
+
+export interface MomentComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  avatar: string;
+  text: string;
+  timestamp: number;
+  replyToCommentId?: string;
+  replyToAuthorName?: string;
+}
+
 export interface Moment {
   id: string;
   authorId: string;
@@ -263,6 +288,34 @@ export interface Moment {
   text: string;
   images: string[];
   timestamp: number;
+  likes?: MomentLike[];
+  comments?: MomentComment[];
+  generationSource?: 'user' | 'characterRemote' | 'characterLocal';
+  focusTraceId?: string;
+}
+
+export interface ProactiveMomentSchedule {
+  characterId: string;
+  nextDueAt: number;
+  lastPostedAt?: number;
+  lastFocusTraceId?: string;
+}
+
+export type ProactiveMomentSchedules = Record<string, ProactiveMomentSchedule>;
+
+export type StickerScope = 'global' | 'relationship';
+
+export interface StickerAsset {
+  schemaVersion: 1;
+  id: string;
+  uri: string;
+  name: string;
+  tags: string[];
+  mimeType: string;
+  animated: boolean;
+  scope: StickerScope;
+  characterId?: string;
+  createdAt: number;
 }
 
 export interface PaymentModalState {
@@ -343,7 +396,7 @@ export type HapticType = 'light' | 'medium' | 'heavy' | 'success' | 'error';
 
 export type AppName = 'wechat' | 'characters' | 'settings' | 'worldbook' | 'theme' | 'user' | 'presets';
 export type WeChatTab = 'chats' | 'contacts' | 'discover' | 'me';
-export type WeChatPage = 'root' | 'chat' | 'profile' | 'moments' | 'wallet' | 'context';
+export type WeChatPage = 'root' | 'chat' | 'profile' | 'moments' | 'stickers' | 'wallet' | 'context';
 export type ChatPanel = 'none' | 'voice' | 'emoji' | 'plus';
 
 export interface ThemeStyles {

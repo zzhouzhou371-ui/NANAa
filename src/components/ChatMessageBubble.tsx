@@ -21,7 +21,13 @@ import {
   X,
 } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
-import { useNativeVoicePlayback } from '../services/nativeAudioPlaybackRuntime';
+import {
+  stopOneShotAudioPlayback,
+  stopSharedVoiceMessagePlayback,
+  useNativeVoicePlayback,
+} from '../services/nativeAudioPlaybackRuntime';
+import { createSpeechSynthesisPlan } from '../services/mediaRuntime';
+import { speakSpeechSynthesisPlan, stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Character, Message, Payment } from '../types';
 import { triggerHaptic } from '../utils/haptics';
@@ -345,6 +351,7 @@ export function ChatMessageBubble({
   const showDeliveryStatus = msg.sender === 'user' && !!msg.deliveryStatus && !isPayment;
   const deliveryFailed = msg.deliveryStatus === 'failed';
   const isImage = msg.type === 'image' && !!msg.imageUri;
+  const isSticker = msg.type === 'sticker' && !!msg.stickerUri;
   const isVoice = msg.type === 'voice';
   const isVideoCallEvent = msg.sender === 'system' && (/\bvideo call\b/i.test(msg.text) || /视频通话/.test(msg.text));
   const isCallEvent = msg.sender === 'system' && (/\b(voice|video) call\b/i.test(msg.text) || /(语音通话|视频通话|通话)/.test(msg.text));
@@ -415,7 +422,8 @@ export function ChatMessageBubble({
     );
   }
 
-  const bubbleWidth = isPayment ? specialBubbleWidth : isImage ? imageBubbleWidth : isVoice ? voiceBubbleWidth : undefined;
+  const stickerBubbleWidth = 116;
+  const bubbleWidth = isPayment ? specialBubbleWidth : isImage ? imageBubbleWidth : isSticker ? stickerBubbleWidth : isVoice ? voiceBubbleWidth : undefined;
   const backgroundColor = payment?.kind === 'transfer'
     ? neumorphicPalette.transfer
     : payment?.kind === 'redPacket'
@@ -440,10 +448,21 @@ export function ChatMessageBubble({
     : { borderTopLeftRadius: 17, borderTopRightRadius: 17, borderBottomLeftRadius: 8, borderBottomRightRadius: 17 };
   const bubbleFrameStyle = {
     width: bubbleWidth,
-    maxWidth: isPayment ? specialBubbleWidth : isImage ? imageBubbleWidth : isVoice ? voiceBubbleWidth : maxBubbleWidth,
+    maxWidth: isPayment ? specialBubbleWidth : isImage ? imageBubbleWidth : isSticker ? stickerBubbleWidth : isVoice ? voiceBubbleWidth : maxBubbleWidth,
     minWidth: isPayment ? specialBubbleWidth : undefined,
   };
-  const bubbleContent = (
+  const bubbleContent = isSticker && msg.stickerUri ? (
+    <Image
+      source={{ uri: msg.stickerUri }}
+      autoplay
+      cachePolicy="memory-disk"
+      contentFit="contain"
+      transition={100}
+      accessible
+      accessibilityLabel={msg.stickerName || (t.stickers ?? 'Sticker')}
+      style={{ width: stickerBubbleWidth, height: stickerBubbleWidth }}
+    />
+  ) : (
     <ChatBubbleSurface
       variant={bubbleVariant}
       side={msg.sender === 'user' ? 'outgoing' : 'incoming'}
@@ -589,11 +608,47 @@ function VoiceBubbleContent({
   const { t } = useApp();
   const playback = useNativeVoicePlayback(msg.audioUri);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [deviceSpeaking, setDeviceSpeaking] = useState(false);
+  const activeChatId = useNanaStore(state => state.activeChatId);
+  const speechLanguage = useNanaStore(state => state.speechLanguage);
+  const activeCharacter = useNanaStore(state => (
+    state.characters.find(character => character.id === activeChatId)
+  ));
+  const canUseDeviceSpeech = msg.sender === 'char'
+    && !!msg.transcript?.trim()
+    && activeCharacter?.supportsVoiceReply === true;
+  const canPlayVoice = playback.canPlay || canUseDeviceSpeech;
   const handlePlayback = useCallback(() => {
-    if (!playback.canPlay) return;
+    if (!canPlayVoice) return;
     triggerHaptic('light');
-    void playback.toggle();
-  }, [playback]);
+    if (playback.canPlay) {
+      void stopSpeechSynthesis();
+      setDeviceSpeaking(false);
+      void playback.toggle();
+      return;
+    }
+    if (!activeCharacter || !msg.transcript?.trim()) return;
+    if (deviceSpeaking) {
+      void stopSpeechSynthesis();
+      setDeviceSpeaking(false);
+      return;
+    }
+    stopOneShotAudioPlayback();
+    stopSharedVoiceMessagePlayback();
+    setDeviceSpeaking(true);
+    void speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
+      character: activeCharacter,
+      text: msg.transcript,
+      language: speechLanguage || 'zh-CN',
+    }), { waitForCompletion: true }).finally(() => setDeviceSpeaking(false));
+  }, [
+    activeCharacter,
+    canPlayVoice,
+    deviceSpeaking,
+    msg.transcript,
+    playback,
+    speechLanguage,
+  ]);
   const duration = Math.max(0, Math.round(msg.audioDurationSec || playback.durationSec || 0));
   const durationLabel = formatVoiceDuration(duration);
   const bars = [8, 13, 18, 11, 16, 22, 14, 9, 19, 13, 17, 10, 21, 15, 8, 13];
@@ -602,15 +657,15 @@ function VoiceBubbleContent({
     <View style={{ width: '100%' }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={selectMode ? (isSelected ? t.deselectMessage : t.selectMessage) : playback.canPlay ? (playback.isPlaying ? t.pauseVoice : t.playVoice) : t.voiceMessage}
-        accessibilityState={selectMode ? { selected: isSelected } : { disabled: !playback.canPlay }}
-        onPress={selectMode ? onSelect : playback.canPlay ? handlePlayback : undefined}
-        disabled={!selectMode && !playback.canPlay}
+        accessibilityLabel={selectMode ? (isSelected ? t.deselectMessage : t.selectMessage) : canPlayVoice ? (playback.isPlaying || deviceSpeaking ? t.pauseVoice : t.playVoice) : t.voiceMessage}
+        accessibilityState={selectMode ? { selected: isSelected } : { disabled: !canPlayVoice }}
+        onPress={selectMode ? onSelect : canPlayVoice ? handlePlayback : undefined}
+        disabled={!selectMode && !canPlayVoice}
         style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10 }}
       >
         <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: `${ink}1F` }}>
-          {playback.canPlay
-            ? playback.isPlaying
+          {canPlayVoice
+            ? playback.isPlaying || deviceSpeaking
               ? <Pause size={14} color={ink} fill={ink} />
               : <Play size={14} color={ink} fill={ink} />
             : <AudioLines size={16} color={`${ink}C7`} strokeWidth={1.7} />}

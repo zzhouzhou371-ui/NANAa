@@ -227,9 +227,16 @@ export const runtimeLocalPaymentReply = (
   tone: 'reserved' | 'playful' | 'gentle' | 'default',
   kind: PaymentKind,
   name: string,
+  decision: 'accept' | 'decline' = 'accept',
 ) => {
   if (resolveRuntimeLanguage(language) === 'zh') {
     const object = kind === 'redPacket' ? '这个红包' : '这笔转账';
+    if (decision === 'decline') {
+      if (tone === 'reserved') return `这次我不收${object}。你的心意我明白，钱留给自己。`;
+      if (tone === 'playful') return `${object}先退回去啦。想哄我开心，可以换个不用花钱的办法。`;
+      if (tone === 'gentle') return `谢谢你想到我，不过${object}我不能收。你把它留着，好好照顾自己。`;
+      return `${object}我先不收了，但你的心意我收到了。`;
+    }
     if (tone === 'reserved') return `我收下${object}了。谢谢，这份心意我会记得。`;
     if (tone === 'playful') return `那我就开心收下${object}啦。你总能给我惊喜。`;
     if (tone === 'gentle') return `谢谢你，我收下${object}了。这份心意我会好好珍惜。`;
@@ -237,6 +244,12 @@ export const runtimeLocalPaymentReply = (
   }
 
   const object = kind === 'redPacket' ? 'red packet' : 'transfer';
+  if (decision === 'decline') {
+    if (tone === 'reserved') return `I won't take the ${object} this time. Keep it; I understand what you meant.`;
+    if (tone === 'playful') return `Sending the ${object} back. Try making me smile without spending anything.`;
+    if (tone === 'gentle') return `Thank you for thinking of me, but I can't take the ${object}. Please keep it for yourself.`;
+    return `I won't take the ${object}, but I do appreciate the thought.`;
+  }
   if (tone === 'reserved') return `I'll accept the ${object}. Thank you · I won't forget the thought behind it.`;
   if (tone === 'playful') return `Then I'll gladly accept the ${object}. You really know how to surprise me.`;
   if (tone === 'gentle') return `Thank you. I'll accept the ${object} and keep this kindness close.`;

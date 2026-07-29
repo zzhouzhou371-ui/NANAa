@@ -1,10 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import { Platform } from 'react-native';
 import {
   createAudioPlayer,
   setAudioModeAsync,
-  useAudioPlayer,
-  useAudioPlayerStatus,
   type AudioPlayer,
 } from 'expo-audio';
 import { configureNativeCallPlaybackAudioSession } from './nativeCallAudioRouteRuntime';
@@ -19,58 +17,150 @@ export interface NativeVoicePlaybackController {
   toggle: () => Promise<boolean>;
 }
 
+interface SharedVoicePlaybackSnapshot {
+  uri?: string;
+  playing: boolean;
+  currentTime: number;
+  duration: number;
+  didJustFinish: boolean;
+  errorMessage?: string;
+}
+
+const idleSharedVoiceSnapshot: SharedVoicePlaybackSnapshot = {
+  playing: false,
+  currentTime: 0,
+  duration: 0,
+  didJustFinish: false,
+};
+let sharedVoicePlayer: AudioPlayer | null = null;
+let sharedVoicePlayerSubscription: { remove: () => void } | null = null;
+let sharedVoiceSnapshot = idleSharedVoiceSnapshot;
+const sharedVoiceListeners = new Set<() => void>();
+
+const emitSharedVoiceSnapshot = (next: SharedVoicePlaybackSnapshot) => {
+  sharedVoiceSnapshot = next;
+  for (const listener of sharedVoiceListeners) listener();
+};
+
+const subscribeSharedVoicePlayback = (listener: () => void) => {
+  sharedVoiceListeners.add(listener);
+  return () => sharedVoiceListeners.delete(listener);
+};
+
+const releaseSharedVoicePlayer = () => {
+  sharedVoicePlayerSubscription?.remove();
+  sharedVoicePlayerSubscription = null;
+  if (sharedVoicePlayer) {
+    try {
+      sharedVoicePlayer.pause();
+      sharedVoicePlayer.remove();
+    } catch {
+      // The native SharedObject may already be released during app teardown.
+    }
+  }
+  sharedVoicePlayer = null;
+  emitSharedVoiceSnapshot(idleSharedVoiceSnapshot);
+};
+
+const ensureSharedVoicePlayer = (audioUri: string) => {
+  if (sharedVoicePlayer && sharedVoiceSnapshot.uri === audioUri) return sharedVoicePlayer;
+  releaseSharedVoicePlayer();
+  const player = createAudioPlayer({ uri: audioUri });
+  sharedVoicePlayer = player;
+  emitSharedVoiceSnapshot({
+    ...idleSharedVoiceSnapshot,
+    uri: audioUri,
+  });
+  sharedVoicePlayerSubscription = player.addListener('playbackStatusUpdate', status => {
+    if (sharedVoicePlayer !== player) return;
+    emitSharedVoiceSnapshot({
+      uri: audioUri,
+      playing: status.playing,
+      currentTime: Number.isFinite(status.currentTime) ? Math.max(0, status.currentTime) : 0,
+      duration: Number.isFinite(status.duration) ? Math.max(0, status.duration) : 0,
+      didJustFinish: status.didJustFinish,
+    });
+    if (status.didJustFinish) {
+      setTimeout(() => {
+        if (sharedVoicePlayer === player) releaseSharedVoicePlayer();
+      }, 0);
+    }
+  });
+  return player;
+};
+
 export function useNativeVoicePlayback(audioUri?: string): NativeVoicePlaybackController {
-  const source = useMemo(() => (audioUri ? { uri: audioUri } : null), [audioUri]);
-  const player = useAudioPlayer(source, { updateInterval: 250 });
-  const status = useAudioPlayerStatus(player);
-  const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const status = useSyncExternalStore(
+    subscribeSharedVoicePlayback,
+    () => sharedVoiceSnapshot,
+    () => idleSharedVoiceSnapshot,
+  );
   const canPlay = !!audioUri && (Platform.OS === 'ios' || Platform.OS === 'android' || Platform.OS === 'web');
-  const positionSec = Number.isFinite(status.currentTime) ? Math.max(0, status.currentTime) : 0;
-  const durationSec = Number.isFinite(status.duration) ? Math.max(0, status.duration) : 0;
+  const isActiveSource = !!audioUri && status.uri === audioUri;
+  const positionSec = isActiveSource && Number.isFinite(status.currentTime)
+    ? Math.max(0, status.currentTime)
+    : 0;
+  const durationSec = isActiveSource && Number.isFinite(status.duration)
+    ? Math.max(0, status.duration)
+    : 0;
   const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0;
 
   const toggle = useCallback(async () => {
-    if (!canPlay) return false;
+    if (!canPlay || !audioUri) return false;
 
     try {
-      setErrorMessage(undefined);
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
       });
-
-      if (status.playing) {
+      releaseOneShotPlayer(activeOneShotPlayer, false);
+      const player = ensureSharedVoicePlayer(audioUri);
+      const latest = sharedVoiceSnapshot;
+      if (latest.uri === audioUri && latest.playing) {
         player.pause();
         return true;
       }
 
-      if (status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration - 0.1)) {
+      if (
+        latest.uri === audioUri
+        && (latest.didJustFinish || (latest.duration > 0 && latest.currentTime >= latest.duration - 0.1))
+      ) {
         await player.seekTo(0);
       }
       player.play();
       return true;
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not play voice message');
+      emitSharedVoiceSnapshot({
+        ...idleSharedVoiceSnapshot,
+        uri: audioUri,
+        errorMessage: error instanceof Error ? error.message : 'Could not play voice message',
+      });
       return false;
     }
-  }, [canPlay, player, status.currentTime, status.didJustFinish, status.duration, status.playing]);
+  }, [audioUri, canPlay]);
 
   return {
     canPlay,
-    isPlaying: status.playing,
+    isPlaying: isActiveSource && status.playing,
     positionSec,
     durationSec,
     progress,
-    errorMessage,
+    errorMessage: isActiveSource ? status.errorMessage : undefined,
     toggle,
   };
 }
 
 let activeOneShotPlayer: AudioPlayer | null = null;
 let activeOneShotCompletion: ((finished: boolean) => void) | null = null;
+let activeOneShotCleanup: (() => void) | null = null;
 
 const releaseOneShotPlayer = (player: AudioPlayer | null, finished = false) => {
   if (!player) return;
+  if (activeOneShotPlayer === player) {
+    const cleanup = activeOneShotCleanup;
+    activeOneShotCleanup = null;
+    cleanup?.();
+  }
   try {
     player.pause();
     player.remove();
@@ -92,6 +182,7 @@ export const playAudioUriOnce = async (
   if (!audioUri) return false;
 
   try {
+    releaseSharedVoicePlayer();
     const usingCallAudioSession = await configureNativeCallPlaybackAudioSession();
     if (!usingCallAudioSession) {
       await setAudioModeAsync({
@@ -108,9 +199,9 @@ export const playAudioUriOnce = async (
     if (!options.waitForCompletion) {
       const subscription = player.addListener('playbackStatusUpdate', (status) => {
         if (!status.didJustFinish) return;
-        subscription.remove();
         releaseOneShotPlayer(player, true);
       });
+      activeOneShotCleanup = () => subscription.remove();
       player.play();
       return true;
     }
@@ -120,8 +211,6 @@ export const playAudioUriOnce = async (
       const settle = (finished: boolean) => {
         if (settled) return;
         settled = true;
-        clearTimeout(safetyTimer);
-        subscription.remove();
         releaseOneShotPlayer(player, finished);
       };
       activeOneShotCompletion = resolve;
@@ -129,6 +218,10 @@ export const playAudioUriOnce = async (
         if (status.didJustFinish) settle(true);
       });
       const safetyTimer = setTimeout(() => settle(false), 60000);
+      activeOneShotCleanup = () => {
+        clearTimeout(safetyTimer);
+        subscription.remove();
+      };
       player.play();
     });
   } catch {
@@ -140,3 +233,5 @@ export const playAudioUriOnce = async (
 export const stopOneShotAudioPlayback = () => {
   releaseOneShotPlayer(activeOneShotPlayer, false);
 };
+
+export const stopSharedVoiceMessagePlayback = releaseSharedVoicePlayer;

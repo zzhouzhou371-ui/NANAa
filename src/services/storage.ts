@@ -8,6 +8,7 @@ import {
 import {
   NANA_ROOT_STORAGE_KEY,
   clearApiKey,
+  clearVoiceApiKey,
   redactSecrets,
   sanitizePersistedRootValue,
 } from './secretStore';
@@ -42,7 +43,7 @@ type ImportEntry = [string, string];
 const ARRAY_STATE_FIELDS = new Set([
   'friends', 'characters', 'savedAvatars', 'momentsList', 'worldBookEntries',
   'onlinePresets', 'offlinePresets', 'callLogs', 'blockedUsers',
-  'relationshipTraces',
+  'relationshipTraces', 'stickers', 'characterMediaAssets', 'characterMediaSendHistory',
 ]);
 const RECORD_STATE_FIELDS = new Set([
   'chatHistory',
@@ -51,13 +52,20 @@ const RECORD_STATE_FIELDS = new Set([
   'unreadCounts',
   'paymentsById',
   'proactiveChatSchedules',
+  'proactiveMomentSchedules',
   'conversationContinuityByCharacter',
 ]);
 const STRING_STATE_FIELDS = new Set([
   'selectedModel', 'myDesc', 'apiUrl', 'myAvatar', 'myName', 'walletBalance',
   'momentsBg', 'activeOnlinePresetId', 'activeOfflinePresetId', 'speechLanguage',
+  'voiceApiUrl', 'voiceSttModel', 'voiceTtsModel',
 ]);
-const BOOLEAN_STATE_FIELDS = new Set(['showMemoryDebug', 'autoTTS']);
+const BOOLEAN_STATE_FIELDS = new Set([
+  'showMemoryDebug',
+  'autoTTS',
+  'proactiveNotificationsEnabled',
+  'voiceProviderEnabled',
+]);
 const NUMBER_STATE_FIELDS = new Set(['memoryWindowSize', 'walletBalanceMinor']);
 const ALLOWED_STATE_FIELDS = new Set([
   ...ARRAY_STATE_FIELDS,
@@ -660,6 +668,7 @@ export function importData(): void {
 
 export async function clearAllData(): Promise<void> {
   await clearApiKey();
+  await clearVoiceApiKey();
   const allKeys = await AsyncStorage.getAllKeys();
   const nanaKeys = allKeys.filter(isNanaStorageKey);
   if (nanaKeys.length > 0) await AsyncStorage.multiRemove(nanaKeys);

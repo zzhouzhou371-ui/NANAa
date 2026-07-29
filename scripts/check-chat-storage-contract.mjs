@@ -13,7 +13,7 @@ const partializeEnd = storeSource.indexOf('export const useNanaStore', partializ
 const partializeSource = storeSource.slice(partializeStart, partializeEnd);
 expect(partializeStart >= 0 && partializeEnd > partializeStart, 'persisted-state selector must exist');
 expect(!partializeSource.includes('chatHistory: state.chatHistory'), 'chat history must not be duplicated in the Zustand JSON payload');
-expect(storeSource.includes('NANA_PERSIST_VERSION = 9'), 'short-term continuity persistence requires storage version 9');
+expect(storeSource.includes('NANA_PERSIST_VERSION = 13'), 'voice provider, online media, and moments migration require storage version 13');
 
 const nativeRepository = read('src/repositories/chatMessageRepository.native.ts');
 for (const required of [
@@ -45,6 +45,7 @@ expect(storageSource.includes('replaceDurableChatHistory(durableChatBackup)'), '
 const chatViewSource = read('src/components/ChatView.tsx');
 expect(chatViewSource.includes('<FlashList'), 'chat rendering must use a recycling list');
 expect(chatViewSource.includes('startRenderingFromBottom: true'), 'chat rendering must start from the newest messages');
+expect(chatViewSource.includes('animateAutoScrollToBottom: false'), 'opening a chat must not animate down through old messages');
 expect(!chatViewSource.includes('{messages.map('), 'chat rendering must not mount every message with Array.map');
 expect(chatViewSource.includes('__NANA_SMOKE_SEED_LONG_CHAT__'), 'long-chat recycling must have a deterministic smoke path');
 

@@ -5,10 +5,15 @@ import { replaceMacros } from '../utils/macros';
 import {
   generateReply,
   generateProactiveReply,
+  generateMomentComment,
+  generateMomentPost,
   fetchModelList,
   generatePaymentReaction,
 } from '../services/ai';
 import { synthesizeSpeechAudio, transcribeAudioCapture } from '../services/audioAiRuntime';
+import { analyzeDurableImage } from '../services/imageAiRuntime';
+import { createLegacyProviderCapabilitySettings } from '../services/providerCapabilityRuntime';
+import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import {
   appendCallCaptureResult,
   appendCallTranscriptLine,
@@ -22,7 +27,11 @@ import {
   type MediaCaptureResult,
 } from '../services/mediaRuntime';
 import { speakSpeechSynthesisPlan, stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
-import { playAudioUriOnce, stopOneShotAudioPlayback } from '../services/nativeAudioPlaybackRuntime';
+import {
+  playAudioUriOnce,
+  stopOneShotAudioPlayback,
+  stopSharedVoiceMessagePlayback,
+} from '../services/nativeAudioPlaybackRuntime';
 import { discardVoiceCapture, finalizeVoiceCapture } from '../services/nativeAudioRuntime';
 import { redactSecrets } from '../services/secretStore';
 import {
@@ -64,11 +73,32 @@ import {
   selectProactiveFocusEvent,
 } from '../services/proactiveChatRuntime';
 import {
+  createInitialMomentSchedule,
+  createLocalMomentDraft,
+  normalizeProactiveMomentSchedules,
+  rescheduleAfterMomentPost,
+  selectDueMomentCandidate,
+  selectMomentFocusEvent,
+} from '../services/momentsRuntime';
+import {
+  chooseStickerForSemantic,
+  filterStickersForChat,
+  normalizeStickerAssets,
+} from '../services/stickerRuntime';
+import { deletePersistedMediaFile } from '../services/localMediaRepository';
+import {
+  normalizeCharacterMediaAssets,
+  selectCharacterMediaAsset,
+  type CharacterMediaAsset,
+  type CharacterMediaIntent,
+  type CharacterMediaSendRecord,
+} from '../services/characterMediaRuntime';
+import {
   DEFAULT_ONLINE_PRESET,
   DEFAULT_OFFLINE_PRESET,
   DEFAULT_THEME_CONFIG,
 } from '../constants/defaults';
-import { isChromeStyle, isIconStyle, isWallpaperId } from '../services/theme';
+import { isWallpaperId } from '../services/theme';
 import {
   correctRelationshipTrace,
   createRelationshipTrace,
@@ -99,6 +129,7 @@ import type {
   CallLog, CallOverlayState, RelationshipTrace,
   ChatReplyPreference, Payment, PaymentKind, PaymentStatus, ReplyMode,
   ProactiveChatSchedules, ConversationContinuityByCharacter,
+  ProactiveMomentSchedules, ProactiveMomentsMode, StickerAsset, MomentComment,
 } from '../types';
 
 import { triggerHaptic } from '../utils/haptics';
@@ -164,6 +195,15 @@ const characterReplyMode = (character?: Character): ReplyMode => (
     : (character?.preferredReplyMode || 'auto')
 );
 
+const inferCharacterMediaIntent = (text: string): CharacterMediaIntent => {
+  if (/(sad|upset|cry|hurt|难过|伤心|哭|安慰)/i.test(text)) return 'comfort';
+  if (/(congrat|celebrat|happy birthday|恭喜|庆祝|生日快乐)/i.test(text)) return 'celebration';
+  if (/(remember|memory|以前|记得|回忆)/i.test(text)) return 'memory';
+  if (/(where|place|outside|这里|哪里|风景|地点)/i.test(text)) return 'location';
+  if (/(wear|outfit|dress|穿|衣服|造型)/i.test(text)) return 'outfit';
+  return 'dailyLife';
+};
+
 const normalizeCharacter = (value: unknown): unknown => {
   if (!isPersistedStateRecord(value)) return value;
   const preference = value.chatReplyPreference === 'adaptive'
@@ -176,6 +216,12 @@ const normalizeCharacter = (value: unknown): unknown => {
     chatReplyPreference: preference,
     preferredReplyMode: preferenceToLegacyReplyMode(preference),
     proactiveMessagingEnabled: value.proactiveMessagingEnabled !== false,
+    proactiveMomentsMode: value.proactiveMomentsMode === 'off'
+      || value.proactiveMomentsMode === 'normal'
+      || value.proactiveMomentsMode === 'occasional'
+      ? value.proactiveMomentsMode
+      : 'occasional',
+    autonomousImageSharingEnabled: value.autonomousImageSharingEnabled === true,
   };
 };
 
@@ -267,6 +313,18 @@ const createPaymentChatMessage = (
 });
 
 const paymentWakeupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let activeCallVoiceRequestController: AbortController | null = null;
+let activeVoicePreviewController: AbortController | null = null;
+
+const cancelActiveCallVoiceRequest = () => {
+  activeCallVoiceRequestController?.abort();
+  activeCallVoiceRequestController = null;
+};
+
+const cancelActiveVoicePreview = () => {
+  activeVoicePreviewController?.abort();
+  activeVoicePreviewController = null;
+};
 
 const schedulePaymentReconcileAt = (
   paymentId: string,
@@ -418,6 +476,7 @@ const transitionOutgoingTurn = (
 };
 
 let proactiveHeartbeatInFlight = false;
+let proactiveMomentHeartbeatInFlight = false;
 
 export interface SendChatMessageOptions {
   textOverride?: string;
@@ -426,6 +485,7 @@ export interface SendChatMessageOptions {
   targetChatId?: string;
   retryMessageIds?: number[];
   turnIdOverride?: string;
+  stickerId?: string;
 }
 
 export interface PaymentTransitionMeta {
@@ -507,6 +567,9 @@ export interface NanaStore {
   savedAvatars: string[];
   chatHistory: ChatHistory;
   momentsList: Moment[];
+  stickers: StickerAsset[];
+  characterMediaAssets: CharacterMediaAsset[];
+  characterMediaSendHistory: CharacterMediaSendRecord[];
   themeConfig: ThemeConfig;
   worldBookEntries: WorldBookEntry[];
   onlinePresets: Preset[];
@@ -516,6 +579,8 @@ export interface NanaStore {
   callLogs: CallLog[];
   relationshipTraces: RelationshipTrace[];
   proactiveChatSchedules: ProactiveChatSchedules;
+  proactiveMomentSchedules: ProactiveMomentSchedules;
+  proactiveNotificationsEnabled: boolean;
   conversationContinuityByCharacter: ConversationContinuityByCharacter;
 
   // Persisted: Memory & Voice
@@ -523,6 +588,11 @@ export interface NanaStore {
   showMemoryDebug: boolean;
   autoTTS: boolean;
   speechLanguage: string;
+  voiceProviderEnabled: boolean;
+  voiceApiUrl: string;
+  voiceApiKey: string;
+  voiceSttModel: string;
+  voiceTtsModel: string;
   lastForwardedMsgId: Record<string, number>;
   unreadCounts: Record<string, number>;
 
@@ -555,6 +625,8 @@ export interface NanaStore {
   showComposeMoment: boolean;
   momentText: string;
   momentImageUrl: string;
+  stickerManagerCharacterId: string | null;
+  pendingMomentCharacterIds: string[];
   chatInput: string;
   callOverlay: CallOverlayState;
 
@@ -590,6 +662,10 @@ export interface NanaStore {
   // Transient: Temp form state
   tempApiUrl: string;
   tempApiKey: string;
+  tempVoiceApiUrl: string;
+  tempVoiceApiKey: string;
+  tempVoiceSttModel: string;
+  tempVoiceTtsModel: string;
   tempMyName: string;
   tempMyAvatar: string;
   tempMyDesc: string;
@@ -611,6 +687,16 @@ export interface NanaStore {
   goBack: () => boolean;
   setWalletBalance: (value: string) => boolean;
   setCharacterProactiveMessagingEnabled: (characterId: string, enabled: boolean) => void;
+  setCharacterProactiveMomentsMode: (characterId: string, mode: ProactiveMomentsMode) => void;
+  setCharacterAutonomousImageSharingEnabled: (characterId: string, enabled: boolean) => void;
+  addCharacterMediaAsset: (characterId: string, uri: string) => void;
+  publishMoment: (draft: { text: string; images: string[] }) => string | null;
+  toggleMomentLike: (momentId: string) => void;
+  addMomentComment: (momentId: string, text: string, replyToCommentId?: string) => Promise<void>;
+  addStickers: (stickers: StickerAsset[]) => void;
+  updateSticker: (sticker: StickerAsset) => void;
+  removeSticker: (stickerId: string) => void;
+  sendSticker: (stickerId: string) => Promise<void>;
   clearChat: (chatId: string) => void;
   correctRelationshipMemory: (traceId: string, summary: string) => boolean;
   sendChatMessage: (type?: MessageType, amount?: string, note?: string, mediaCapture?: MediaCaptureResult, options?: SendChatMessageOptions) => Promise<void>;
@@ -620,22 +706,110 @@ export interface NanaStore {
   reconcilePayments: (now?: number) => Promise<void>;
   reconcileChatDeliveryStates: (now?: number) => void;
   runProactiveChatHeartbeat: (now?: number) => Promise<void>;
+  runProactiveMomentsHeartbeat: (now?: number) => Promise<void>;
   retryChatMessage: (errorMessageId: number) => Promise<void>;
   startOutgoingCall: (type: 'voice' | 'video') => void;
   startIncomingCall: (type: 'voice' | 'video', characterId: string) => void;
   answerCall: () => void;
+  invalidateActiveCallVoiceInput: (startedAt?: number) => void;
   endActiveCall: (status?: CallLog['status']) => void;
   sendCallSpeech: (capture: MediaCaptureResult) => Promise<void>;
+  previewCharacterVoice: (input?: {
+    characterId?: string;
+    characterName?: string;
+    voiceProfileId?: string;
+  }) => Promise<boolean>;
   doFetchModels: (url: string, key: string) => Promise<void>;
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 9;
+export const NANA_PERSIST_VERSION = 13;
 
 type PersistedStateRecord = Record<string, unknown>;
 
 const isPersistedStateRecord = (value: unknown): value is PersistedStateRecord => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const normalizeMoment = (value: unknown): Moment | null => {
+  if (!isPersistedStateRecord(value)) return null;
+  if (
+    typeof value.id !== 'string'
+    || typeof value.authorId !== 'string'
+    || typeof value.authorName !== 'string'
+    || typeof value.avatar !== 'string'
+    || typeof value.text !== 'string'
+    || !Array.isArray(value.images)
+    || typeof value.timestamp !== 'number'
+    || !Number.isFinite(value.timestamp)
+  ) return null;
+  const likes = Array.isArray(value.likes)
+    ? value.likes.flatMap(candidate => {
+        if (!isPersistedStateRecord(candidate)) return [];
+        if (
+          typeof candidate.authorId !== 'string'
+          || typeof candidate.authorName !== 'string'
+          || typeof candidate.avatar !== 'string'
+          || typeof candidate.timestamp !== 'number'
+        ) return [];
+        return [{
+          authorId: candidate.authorId,
+          authorName: candidate.authorName,
+          avatar: candidate.avatar,
+          timestamp: candidate.timestamp,
+        }];
+      })
+    : [];
+  const comments = Array.isArray(value.comments)
+    ? value.comments.flatMap(candidate => {
+        if (!isPersistedStateRecord(candidate)) return [];
+        if (
+          typeof candidate.id !== 'string'
+          || typeof candidate.authorId !== 'string'
+          || typeof candidate.authorName !== 'string'
+          || typeof candidate.avatar !== 'string'
+          || typeof candidate.text !== 'string'
+          || typeof candidate.timestamp !== 'number'
+        ) return [];
+        return [{
+          id: candidate.id,
+          authorId: candidate.authorId,
+          authorName: candidate.authorName,
+          avatar: candidate.avatar,
+          text: candidate.text,
+          timestamp: candidate.timestamp,
+          ...(typeof candidate.replyToCommentId === 'string'
+            ? { replyToCommentId: candidate.replyToCommentId }
+            : {}),
+          ...(typeof candidate.replyToAuthorName === 'string'
+            ? { replyToAuthorName: candidate.replyToAuthorName }
+            : {}),
+        }];
+      })
+    : [];
+  return {
+    id: value.id,
+    authorId: value.authorId,
+    authorName: value.authorName,
+    avatar: value.avatar,
+    text: value.text.slice(0, 2_000),
+    images: value.images.filter((uri): uri is string => typeof uri === 'string').slice(0, 9),
+    timestamp: value.timestamp,
+    likes,
+    comments,
+    generationSource: value.generationSource === 'characterRemote'
+      || value.generationSource === 'characterLocal'
+      ? value.generationSource
+      : value.authorId === 'me' || value.authorId === 'user' ? 'user' : 'characterLocal',
+    ...(typeof value.focusTraceId === 'string' ? { focusTraceId: value.focusTraceId } : {}),
+  };
+};
+
+const normalizeMoments = (value: unknown): Moment[] => (
+  Array.isArray(value) ? value.flatMap(candidate => {
+    const normalized = normalizeMoment(candidate);
+    return normalized ? [normalized] : [];
+  }).slice(0, 500) : []
 );
 
 const normalizeThemeConfig = (value: unknown): ThemeConfig => {
@@ -644,7 +818,6 @@ const normalizeThemeConfig = (value: unknown): ThemeConfig => {
     ? config.backgroundImage
     : DEFAULT_THEME_CONFIG.backgroundImage;
   const legacyWallpaperId = backgroundImage ? 'custom' : 'system';
-  const legacyIconStyle = config.iconStyle === 'default' ? 'system' : config.iconStyle;
 
   return {
     themeName: typeof config.themeName === 'string'
@@ -667,12 +840,11 @@ const normalizeThemeConfig = (value: unknown): ThemeConfig => {
       ? config.customTextColor
       : DEFAULT_THEME_CONFIG.customTextColor,
     language: config.language === 'zh' ? 'zh' : 'en',
-    iconStyle: isIconStyle(legacyIconStyle)
-      ? legacyIconStyle
-      : DEFAULT_THEME_CONFIG.iconStyle,
-    chromeStyle: isChromeStyle(config.chromeStyle)
-      ? config.chromeStyle
-      : DEFAULT_THEME_CONFIG.chromeStyle,
+    // The original Nana icon/chrome variants are no longer user-facing.
+    // Normalize legacy persisted selections so existing installs cannot become
+    // stranded on a hidden theme.
+    iconStyle: 'neumorphic-v1',
+    chromeStyle: 'neumorphic-v1',
   };
 };
 
@@ -692,12 +864,42 @@ export function migrateNanaPersistedState(persistedState: unknown): PersistedSta
     ...(Array.isArray(state.characters)
       ? { characters: state.characters.map(normalizeCharacter) }
       : {}),
+    momentsList: normalizeMoments(state.momentsList),
+    stickers: normalizeStickerAssets(state.stickers),
+    characterMediaAssets: normalizeCharacterMediaAssets(state.characterMediaAssets),
+    characterMediaSendHistory: Array.isArray(state.characterMediaSendHistory)
+      ? state.characterMediaSendHistory.flatMap(candidate => {
+          if (
+            !isPersistedStateRecord(candidate)
+            || typeof candidate.assetId !== 'string'
+            || typeof candidate.characterId !== 'string'
+            || typeof candidate.sentAt !== 'number'
+          ) return [];
+          return [{
+            assetId: candidate.assetId,
+            characterId: candidate.characterId,
+            sentAt: candidate.sentAt,
+          }];
+        }).slice(-500)
+      : [],
     unreadCounts: isPersistedStateRecord(state.unreadCounts) ? state.unreadCounts : {},
     blockedUsers: Array.isArray(state.blockedUsers)
       ? state.blockedUsers.filter((value): value is string => typeof value === 'string')
       : [],
     relationshipTraces: normalizeRelationshipTraces(state.relationshipTraces),
     proactiveChatSchedules: normalizeProactiveChatSchedules(state.proactiveChatSchedules),
+    proactiveMomentSchedules: normalizeProactiveMomentSchedules(state.proactiveMomentSchedules),
+    proactiveNotificationsEnabled: state.proactiveNotificationsEnabled === true,
+    voiceProviderEnabled: state.voiceProviderEnabled === true,
+    voiceApiUrl: typeof state.voiceApiUrl === 'string' ? state.voiceApiUrl.trim() : '',
+    voiceSttModel: typeof state.voiceSttModel === 'string' && state.voiceSttModel.trim()
+      ? state.voiceSttModel.trim()
+      : 'gpt-4o-mini-transcribe',
+    voiceTtsModel: typeof state.voiceTtsModel === 'string' && state.voiceTtsModel.trim()
+      ? state.voiceTtsModel.trim() === 'gpt-4o-mini-tts'
+        ? 'tts-1'
+        : state.voiceTtsModel.trim()
+      : 'tts-1',
     conversationContinuityByCharacter: normalizeConversationContinuityMap(
       state.conversationContinuityByCharacter,
     ),
@@ -719,6 +921,8 @@ export function mergeNanaPersistedState(
     ...safePersistedState,
     apiKey: currentState.apiKey,
     tempApiKey: currentState.tempApiKey,
+    voiceApiKey: currentState.voiceApiKey,
+    tempVoiceApiKey: currentState.tempVoiceApiKey,
   } as NanaStore;
 }
 
@@ -737,6 +941,9 @@ export function selectNanaPersistedState(state: NanaStore): PersistedStateRecord
     characters: state.characters,
     savedAvatars: state.savedAvatars,
     momentsList: state.momentsList,
+    stickers: state.stickers,
+    characterMediaAssets: state.characterMediaAssets,
+    characterMediaSendHistory: state.characterMediaSendHistory,
     themeConfig: state.themeConfig,
     worldBookEntries: state.worldBookEntries,
     onlinePresets: state.onlinePresets,
@@ -746,11 +953,17 @@ export function selectNanaPersistedState(state: NanaStore): PersistedStateRecord
     callLogs: state.callLogs,
     relationshipTraces: state.relationshipTraces,
     proactiveChatSchedules: state.proactiveChatSchedules,
+    proactiveMomentSchedules: state.proactiveMomentSchedules,
+    proactiveNotificationsEnabled: state.proactiveNotificationsEnabled,
     conversationContinuityByCharacter: state.conversationContinuityByCharacter,
     memoryWindowSize: state.memoryWindowSize,
     showMemoryDebug: state.showMemoryDebug,
     autoTTS: state.autoTTS,
     speechLanguage: state.speechLanguage,
+    voiceProviderEnabled: state.voiceProviderEnabled,
+    voiceApiUrl: state.voiceApiUrl,
+    voiceSttModel: state.voiceSttModel,
+    voiceTtsModel: state.voiceTtsModel,
     lastForwardedMsgId: state.lastForwardedMsgId,
     unreadCounts: state.unreadCounts,
     blockedUsers: state.blockedUsers,
@@ -773,9 +986,9 @@ export const useNanaStore = create<NanaStore>()(
       momentsBg: 'https://images.unsplash.com/photo-1707343843437-caacff5cfa74?q=80&w=600',
       friends: ['luna-id', 'kai-id', 'aria-id'],
       characters: [
-        { id: 'luna-id', name: 'Luna', avatar: 'L', gender: 'Female', age: '22', desc: 'A gentle and caring maid who always puts others first. She speaks with a soft, polite tone and is fiercely loyal to those she trusts.', proactiveMessagingEnabled: true },
-        { id: 'kai-id', name: 'Kai', avatar: 'K', gender: 'Male', age: '27', desc: 'A stoic warrior from the northern clans. Quiet, observant, and disciplined in combat, with a softer side he rarely shows.', proactiveMessagingEnabled: true },
-        { id: 'aria-id', name: 'Aria', avatar: 'A', gender: 'Female', age: '24', desc: 'A free-spirited bard who travels the world collecting stories and songs. Witty, charming, and never without her trusty lute.', proactiveMessagingEnabled: true },
+        { id: 'luna-id', name: 'Luna', avatar: 'L', gender: 'Female', age: '22', desc: 'A gentle and caring maid who always puts others first. She speaks with a soft, polite tone and is fiercely loyal to those she trusts.', proactiveMessagingEnabled: true, proactiveMomentsMode: 'occasional', autonomousImageSharingEnabled: false },
+        { id: 'kai-id', name: 'Kai', avatar: 'K', gender: 'Male', age: '27', desc: 'A stoic warrior from the northern clans. Quiet, observant, and disciplined in combat, with a softer side he rarely shows.', proactiveMessagingEnabled: true, proactiveMomentsMode: 'occasional', autonomousImageSharingEnabled: false },
+        { id: 'aria-id', name: 'Aria', avatar: 'A', gender: 'Female', age: '24', desc: 'A free-spirited bard who travels the world collecting stories and songs. Witty, charming, and never without her trusty lute.', proactiveMessagingEnabled: true, proactiveMomentsMode: 'occasional', autonomousImageSharingEnabled: false },
       ],
       savedAvatars: ['U', 'L', 'K', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop'],
       chatHistory: {
@@ -795,6 +1008,9 @@ export const useNanaStore = create<NanaStore>()(
         { id: '2', authorId: 'aria-id', authorName: 'Aria', avatar: 'A', text: 'Composed a new melody today. The muses were kind.', images: [], timestamp: Date.now() - 7200000 },
         { id: '3', authorId: 'kai-id', authorName: 'Kai', avatar: 'K', text: 'The northern lights were spectacular tonight.', images: ['https://images.unsplash.com/photo-1531366936337-7c912a4589a7?w=500'], timestamp: Date.now() - 86400000 },
       ],
+      stickers: [],
+      characterMediaAssets: [],
+      characterMediaSendHistory: [],
       themeConfig: { ...DEFAULT_THEME_CONFIG },
       worldBookEntries: [
         { id: '1', keys: 'Luna,maid', content: 'Luna is a gentle and considerate maid who usually wears a black-and-white maid outfit.' },
@@ -806,12 +1022,19 @@ export const useNanaStore = create<NanaStore>()(
       callLogs: [],
       relationshipTraces: [],
       proactiveChatSchedules: {},
+      proactiveMomentSchedules: {},
+      proactiveNotificationsEnabled: false,
       conversationContinuityByCharacter: {},
 
       memoryWindowSize: 10,
       showMemoryDebug: false,
       autoTTS: false,
       speechLanguage: 'zh-CN',
+      voiceProviderEnabled: false,
+      voiceApiUrl: '',
+      voiceApiKey: '',
+      voiceSttModel: 'gpt-4o-mini-transcribe',
+      voiceTtsModel: 'tts-1',
       lastForwardedMsgId: {},
       unreadCounts: {},
 
@@ -842,6 +1065,8 @@ export const useNanaStore = create<NanaStore>()(
       showComposeMoment: false,
       momentText: '',
       momentImageUrl: '',
+      stickerManagerCharacterId: null,
+      pendingMomentCharacterIds: [],
       chatInput: '',
       callOverlay: emptyCallOverlay,
 
@@ -873,6 +1098,10 @@ export const useNanaStore = create<NanaStore>()(
 
       tempApiUrl: '',
       tempApiKey: '',
+      tempVoiceApiUrl: '',
+      tempVoiceApiKey: '',
+      tempVoiceSttModel: 'gpt-4o-mini-transcribe',
+      tempVoiceTtsModel: 'tts-1',
       tempMyName: '',
       tempMyAvatar: '',
       tempMyDesc: '',
@@ -895,6 +1124,7 @@ export const useNanaStore = create<NanaStore>()(
             appReturnTarget: null,
             activeProfileId: null, chatPanel: 'none', showAddFriend: false, searchQuery: '',
             chatInput: '', showComposeMoment: false, momentText: '', momentImageUrl: '',
+            stickerManagerCharacterId: null, pendingMomentCharacterIds: [],
             editingCharId: null, newCharName: '', newCharAvatar: '', newCharDesc: '',
             characterEditorOpen: false, newCharGender: '', newCharAge: '',
             newCharPreferredReplyMode: 'auto', newCharSupportsVoiceReply: false,
@@ -924,7 +1154,16 @@ export const useNanaStore = create<NanaStore>()(
           if (app === 'presets') {
             set({ activeApp: app, presetView: 'list', ...returnPatch });
           } else if (app === 'settings') {
-            set({ activeApp: app, tempApiUrl: state.apiUrl || '', tempApiKey: state.apiKey || '', ...returnPatch });
+            set({
+              activeApp: app,
+              tempApiUrl: state.apiUrl || '',
+              tempApiKey: state.apiKey || '',
+              tempVoiceApiUrl: state.voiceApiUrl || '',
+              tempVoiceApiKey: state.voiceApiKey || '',
+              tempVoiceSttModel: state.voiceSttModel || 'gpt-4o-mini-transcribe',
+              tempVoiceTtsModel: state.voiceTtsModel || 'tts-1',
+              ...returnPatch,
+            });
           } else if (app === 'user') {
             set({
               activeApp: app,
@@ -980,6 +1219,17 @@ export const useNanaStore = create<NanaStore>()(
           return true;
         }
 
+        if (state.activeApp === 'wechat' && state.weChatPage === 'stickers') {
+          if (state.activeProfileId) {
+            set({ weChatPage: 'profile', stickerManagerCharacterId: null });
+          } else if (state.activeChatId) {
+            set({ weChatPage: 'chat', stickerManagerCharacterId: null, chatPanel: 'none' });
+          } else {
+            set({ weChatPage: 'root', stickerManagerCharacterId: null });
+          }
+          return true;
+        }
+
         if (state.activeApp === 'wechat' && state.weChatPage === 'profile' && state.activeChatId) {
           set({
             weChatPage: 'chat',
@@ -994,6 +1244,7 @@ export const useNanaStore = create<NanaStore>()(
             weChatPage: 'root',
             activeChatId: null,
             activeProfileId: null,
+            stickerManagerCharacterId: null,
             chatPanel: 'none',
             selectMode: false,
             selectedMsgIds: [],
@@ -1123,6 +1374,244 @@ export const useNanaStore = create<NanaStore>()(
               : state.proactiveChatSchedules,
           };
         });
+      },
+
+      setCharacterProactiveMomentsMode: (characterId, mode) => {
+        const now = Date.now();
+        set(state => {
+          if (!state.characters.some(character => character.id === characterId)) return {};
+          const proactiveMomentSchedules = { ...state.proactiveMomentSchedules };
+          const nextSchedule = createInitialMomentSchedule(characterId, mode, now);
+          if (nextSchedule) proactiveMomentSchedules[characterId] = nextSchedule;
+          else delete proactiveMomentSchedules[characterId];
+          return {
+            characters: state.characters.map(character => (
+              character.id === characterId ? { ...character, proactiveMomentsMode: mode } : character
+            )),
+            proactiveMomentSchedules,
+          };
+        });
+      },
+
+      setCharacterAutonomousImageSharingEnabled: (characterId, enabled) => {
+        set(state => ({
+          characters: state.characters.map(character => (
+            character.id === characterId
+              ? { ...character, autonomousImageSharingEnabled: enabled }
+              : character
+          )),
+        }));
+      },
+
+      addCharacterMediaAsset: (characterId, uri) => {
+        if (!characterId || !uri) return;
+        const createdAt = Date.now();
+        set(state => ({
+          characterMediaAssets: normalizeCharacterMediaAssets([
+            ...state.characterMediaAssets,
+            {
+              schemaVersion: 1,
+              id: `character-media:${characterId}:${createdAt}:${Math.random().toString(36).slice(2, 8)}`,
+              characterId,
+              uri,
+              source: 'userImported',
+              userApproved: true,
+              tags: ['daily', 'reaction', state.characters.find(character => character.id === characterId)?.name || 'character'],
+              intents: ['dailyLife', 'reaction', 'comfort'],
+              createdAt,
+              enabled: true,
+            },
+          ]),
+        }));
+      },
+
+      publishMoment: ({ text, images }) => {
+        const normalizedText = text.trim();
+        const normalizedImages = images.filter(Boolean).slice(0, 9);
+        if (!normalizedText && normalizedImages.length === 0) return null;
+        const timestamp = Date.now();
+        const momentId = `moment:user:${timestamp}:${Math.random().toString(36).slice(2, 8)}`;
+        set(state => ({
+          momentsList: [{
+            id: momentId,
+            authorId: 'me',
+            authorName: state.myName || runtimeCopyFor(state.themeConfig.language).fallbackUser,
+            avatar: state.myAvatar,
+            text: normalizedText,
+            images: normalizedImages,
+            timestamp,
+            likes: [],
+            comments: [],
+            generationSource: 'user' as const,
+          }, ...state.momentsList].slice(0, 500),
+          showComposeMoment: false,
+          momentText: '',
+          momentImageUrl: '',
+        }));
+        return momentId;
+      },
+
+      toggleMomentLike: (momentId) => {
+        const now = Date.now();
+        set(state => {
+          const moment = state.momentsList.find(item => item.id === momentId);
+          if (!moment) return {};
+          const likes = moment.likes || [];
+          const alreadyLiked = likes.some(like => like.authorId === 'me' || like.authorId === 'user');
+          const nextLikes = alreadyLiked
+            ? likes.filter(like => like.authorId !== 'me' && like.authorId !== 'user')
+            : [...likes, {
+                authorId: 'me',
+                authorName: state.myName || runtimeCopyFor(state.themeConfig.language).fallbackUser,
+                avatar: state.myAvatar,
+                timestamp: now,
+              }];
+          const character = state.characters.find(item => item.id === moment.authorId);
+          return {
+            momentsList: state.momentsList.map(item => (
+              item.id === momentId ? { ...item, likes: nextLikes } : item
+            )),
+            ...(!alreadyLiked && character ? {
+              relationshipTraces: upsertRelationshipTrace(state.relationshipTraces, createRelationshipTrace({
+                characterId: character.id,
+                source: 'moment',
+                sourceEventId: `${momentId}:like:me`,
+                title: runtimeCopyFor(state.themeConfig.language).language === 'zh' ? '朋友圈互动' : 'Moment interaction',
+                summary: runtimeCopyFor(state.themeConfig.language).language === 'zh'
+                  ? `${state.myName || '你'}赞了${character.name}的朋友圈：“${moment.text.slice(0, 80)}”`
+                  : `${state.myName || 'You'} liked ${character.name}'s moment: "${moment.text.slice(0, 120)}"`,
+                occurredAt: now,
+                recallWeight: 0.35,
+                state: 'digested',
+              })),
+            } : {}),
+          };
+        });
+      },
+
+      addMomentComment: async (momentId, text, replyToCommentId) => {
+        const normalizedText = text.trim();
+        if (!normalizedText) return;
+        const now = Date.now();
+        let targetMoment: Moment | undefined;
+        let targetCharacter: Character | undefined;
+        let replyToComment: MomentComment | undefined;
+        set(state => {
+          targetMoment = state.momentsList.find(moment => moment.id === momentId);
+          if (!targetMoment) return {};
+          targetCharacter = state.characters.find(character => character.id === targetMoment?.authorId);
+          replyToComment = targetMoment.comments?.find(comment => comment.id === replyToCommentId);
+          const userComment: MomentComment = {
+            id: `moment-comment:user:${now}:${Math.random().toString(36).slice(2, 8)}`,
+            authorId: 'me',
+            authorName: state.myName || runtimeCopyFor(state.themeConfig.language).fallbackUser,
+            avatar: state.myAvatar,
+            text: normalizedText.slice(0, 500),
+            timestamp: now,
+            ...(replyToComment ? {
+              replyToCommentId: replyToComment.id,
+              replyToAuthorName: replyToComment.authorName,
+            } : {}),
+          };
+          return {
+            momentsList: state.momentsList.map(moment => (
+              moment.id === momentId
+                ? { ...moment, comments: [...(moment.comments || []), userComment] }
+                : moment
+            )),
+            ...(targetCharacter ? {
+              relationshipTraces: upsertRelationshipTrace(state.relationshipTraces, createRelationshipTrace({
+                characterId: targetCharacter.id,
+                source: 'moment',
+                sourceEventId: `${momentId}:comment:${userComment.id}`,
+                title: runtimeCopyFor(state.themeConfig.language).language === 'zh' ? '朋友圈对话' : 'Moment conversation',
+                summary: `${userComment.authorName}: ${userComment.text}`,
+                occurredAt: now,
+                recallWeight: 0.55,
+                state: 'digested',
+              })),
+            } : {}),
+          };
+        });
+        if (!targetMoment || !targetCharacter) return;
+
+        const live = get();
+        let replyText = createLocalMomentDraft({
+          characterId: targetCharacter.id,
+          characterName: targetCharacter.name,
+          personaDescription: targetCharacter.desc,
+          recentEventSummary: normalizedText,
+          focusTraceId: `${momentId}:comment`,
+          language: live.themeConfig.language,
+          now,
+        }).text;
+        if (live.apiKey.trim()) {
+          try {
+            replyText = await generateMomentComment({
+              character: targetCharacter,
+              userName: live.myName,
+              momentText: targetMoment.text,
+              replyToText: normalizedText,
+              language: live.themeConfig.language,
+              apiUrl: live.apiUrl,
+              apiKey: live.apiKey,
+              selectedModel: live.selectedModel,
+            });
+          } catch (error) {
+            console.warn('Moment comment generation failed; using local persona fallback.', error);
+          }
+        }
+        const replyAt = Date.now();
+        const reply: MomentComment = {
+          id: `moment-comment:${targetCharacter.id}:${replyAt}:${Math.random().toString(36).slice(2, 8)}`,
+          authorId: targetCharacter.id,
+          authorName: targetCharacter.name,
+          avatar: targetCharacter.avatar,
+          text: replyText.slice(0, 500),
+          timestamp: replyAt,
+          replyToAuthorName: live.myName || runtimeCopyFor(live.themeConfig.language).fallbackUser,
+        };
+        set(state => ({
+          momentsList: state.momentsList.map(moment => (
+            moment.id === momentId
+              ? { ...moment, comments: [...(moment.comments || []), reply] }
+              : moment
+          )),
+          relationshipTraces: upsertRelationshipTrace(state.relationshipTraces, createRelationshipTrace({
+            characterId: targetCharacter!.id,
+            source: 'moment',
+            sourceEventId: `${momentId}:reply:${reply.id}`,
+            title: runtimeCopyFor(state.themeConfig.language).language === 'zh' ? '朋友圈对话' : 'Moment conversation',
+            summary: `${targetCharacter!.name}: ${reply.text}`,
+            occurredAt: replyAt,
+            recallWeight: 0.6,
+            state: 'digested',
+          })),
+        }));
+      },
+
+      addStickers: (incoming) => {
+        set(state => ({ stickers: normalizeStickerAssets([...state.stickers, ...incoming]).slice(0, 500) }));
+      },
+
+      updateSticker: (sticker) => {
+        set(state => ({
+          stickers: normalizeStickerAssets(
+            state.stickers.some(item => item.id === sticker.id)
+              ? state.stickers.map(item => item.id === sticker.id ? sticker : item)
+              : [...state.stickers, sticker],
+          ).slice(0, 500),
+        }));
+      },
+
+      removeSticker: (stickerId) => {
+        const sticker = get().stickers.find(item => item.id === stickerId);
+        set(state => ({ stickers: state.stickers.filter(item => item.id !== stickerId) }));
+        if (sticker) deletePersistedMediaFile(sticker.uri, 'stickers');
+      },
+
+      sendSticker: async (stickerId) => {
+        await get().sendChatMessage('sticker', undefined, undefined, undefined, { stickerId });
       },
 
       clearChat: (chatId) => {
@@ -1527,6 +2016,8 @@ export const useNanaStore = create<NanaStore>()(
               apiKey: requestState.apiKey,
               selectedModel: requestState.selectedModel,
               language: requestState.themeConfig.language,
+              recentChat: requestState.chatHistory[requestPayment.chatId] || [],
+              relationshipTraces: requestState.relationshipTraces,
             });
             let didCommit = false;
             set(state => {
@@ -1689,6 +2180,21 @@ export const useNanaStore = create<NanaStore>()(
         }
         if (type === 'payment') return;
 
+        const selectedSticker = type === 'sticker'
+          ? filterStickersForChat(state.stickers, chatId)
+              .find(sticker => sticker.id === options?.stickerId)
+          : undefined;
+        if (type === 'sticker' && !selectedSticker) {
+          set({
+            islandNotification: {
+              title: copy.language === 'zh' ? '表情包' : 'Sticker',
+              desc: copy.language === 'zh' ? '这个表情包已不可用' : 'This sticker is no longer available',
+              status: 'error',
+            },
+          });
+          return;
+        }
+
         const requestedText = (options?.textOverride ?? state.chatInput).trim();
         const voiceCaptureIsValid = !mediaCapture || (
           (mediaCapture.phase === 'ready' || mediaCapture.phase === 'processing')
@@ -1715,7 +2221,7 @@ export const useNanaStore = create<NanaStore>()(
         const joiningUserBurst = type === 'text'
           && !!pendingRequestId
           && isCollectingUserMessageBurst(chatId, pendingRequestId);
-        if ((type === 'text' || type === 'voice') && pendingRequestId && !joiningUserBurst) {
+        if ((type === 'text' || type === 'voice' || type === 'sticker') && pendingRequestId && !joiningUserBurst) {
           if (type === 'voice') discardVoiceCapture(mediaCapture);
           set({
             islandNotification: {
@@ -1757,7 +2263,10 @@ export const useNanaStore = create<NanaStore>()(
             ? requestedText
             : type === 'image'
               ? (note || copy.sharedAPhoto)
+              : type === 'sticker'
+                ? `[Sticker: ${selectedSticker?.name || 'Sticker'}; meaning: ${selectedSticker?.tags.join(', ') || 'reaction'}]`
               : (note || '');
+        let imageAnalysisShouldRemember = false;
         const activeChar = state.characters.find(c => c.id === chatId);
         const interactionAt = Date.now();
         const fastChat = process.env.EXPO_PUBLIC_NANA_FAST_CHAT === '1';
@@ -1810,6 +2319,11 @@ export const useNanaStore = create<NanaStore>()(
             imageWidth: finalizedMediaCapture.width,
             imageHeight: finalizedMediaCapture.height,
           } : {}),
+          ...(type === 'sticker' && selectedSticker ? {
+            stickerId: selectedSticker.id,
+            stickerUri: selectedSticker.uri,
+            stickerName: selectedSticker.name,
+          } : {}),
         };
 
         const traceSource = type === 'voice'
@@ -1821,6 +2335,8 @@ export const useNanaStore = create<NanaStore>()(
           ? copy.voiceMessage
           : type === 'image'
             ? copy.sharedPhoto
+            : type === 'sticker'
+              ? (copy.language === 'zh' ? '表情包' : 'Sticker')
             : copy.chatExchange;
         const traceUserName = state.myName || copy.fallbackUser;
         const traceCharacterName = activeChar?.name || copy.fallbackCharacter;
@@ -1839,10 +2355,12 @@ export const useNanaStore = create<NanaStore>()(
           sourceEventId: String(sourceMessageId),
           title: traceTitle,
           summary: initialSummary,
-          mediaUris: finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
-          remember: true,
+          mediaUris: type === 'sticker' && selectedSticker
+            ? [selectedSticker.uri]
+            : finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
+          remember: type !== 'sticker' && type !== 'image',
           recallWeight: type === 'text' ? 0.35 : 0.65,
-          state: type === 'image' ? 'digested' : 'pending',
+          state: type === 'sticker' || type === 'image' ? 'ignored' : 'pending',
         });
 
         set(s => ({
@@ -1890,6 +2408,16 @@ export const useNanaStore = create<NanaStore>()(
         );
 
         if (type === 'voice' && finalizedMediaCapture && !initialVoiceTranscript) {
+          const voiceProvider = resolveVoiceProvider({
+            voiceProviderEnabled: state.voiceProviderEnabled,
+            voiceApiUrl: state.voiceApiUrl,
+            voiceApiKey: state.voiceApiKey,
+            voiceSttModel: state.voiceSttModel,
+            voiceTtsModel: state.voiceTtsModel,
+            chatApiUrl: state.apiUrl,
+            chatApiKey: state.apiKey,
+            chatModel: state.selectedModel,
+          });
           set({
             islandNotification: {
               title: activeChar?.name || copy.voiceMessage,
@@ -1900,9 +2428,10 @@ export const useNanaStore = create<NanaStore>()(
           });
           const transcriptCapture = await transcribeAudioCapture({
             capture: finalizedMediaCapture,
-            apiUrl: state.apiUrl,
-            apiKey: state.apiKey,
-            selectedModel: state.selectedModel,
+            apiUrl: voiceProvider.stt.apiUrl,
+            apiKey: voiceProvider.stt.apiKey,
+            selectedModel: voiceProvider.stt.model,
+            sttModel: voiceProvider.stt.model,
             language: state.speechLanguage || 'zh-CN',
           });
           if (!sourceMessageStillExists()) return;
@@ -1970,17 +2499,50 @@ export const useNanaStore = create<NanaStore>()(
           await waitForOutgoingTurnReadWindow(chatId, chatId, turnId, fastChat);
           if (!sourceMessageStillExists()) return;
           transitionOutgoingTurn(chatId, turnId, 'read');
-          triggerHaptic('success');
-          set({
-            islandNotification: {
-              title: activeChar?.name || copy.photo,
-              desc: copy.photoSent,
-              icon: activeChar?.avatar,
-              status: 'success',
-            },
-          });
-          setTimeout(() => useNanaStore.setState({ islandNotification: null }), 1800);
-          return;
+          if (state.apiKey.trim() && finalizedMediaCapture?.localUri) {
+            set({
+              islandNotification: {
+                title: activeChar?.name || copy.photo,
+                desc: copy.language === 'zh' ? '正在看你发来的图片…' : 'Looking at your photo…',
+                icon: activeChar?.avatar,
+                status: 'processing',
+              },
+            });
+            try {
+              const providerSettings = createLegacyProviderCapabilitySettings({
+                apiUrl: state.apiUrl,
+                apiKey: state.apiKey,
+                selectedModel: state.selectedModel,
+              });
+              const analysis = await analyzeDurableImage({
+                imageUri: finalizedMediaCapture.localUri,
+                vision: providerSettings.vision,
+                language: state.themeConfig.language === 'zh' ? 'zh-CN' : 'en',
+                relationshipContext: `${state.myName} shared this image with ${activeChar?.name || 'the character'}.`,
+              });
+              userText = copy.language === 'zh'
+                ? `${state.myName || '用户'}发来一张图片。你看到的内容：${analysis.description}`
+                : `${state.myName || 'User'} shared a photo. Visible content: ${analysis.description}`;
+              initialSummary = userText;
+              imageAnalysisShouldRemember = !analysis.sensitive;
+              set(current => ({
+                relationshipTraces: upsertRelationshipTrace(current.relationshipTraces, createRelationshipTrace({
+                  characterId: chatId,
+                  source: 'photo',
+                  sourceEventId: String(sourceMessageId),
+                  title: copy.sharedPhoto,
+                  summary: initialSummary,
+                  mediaUris: [finalizedMediaCapture.localUri!],
+                  remember: !analysis.sensitive,
+                  recallWeight: analysis.sensitive ? 0.2 : 0.55,
+                  state: analysis.sensitive ? 'ignored' : 'pending',
+                })),
+              }));
+            } catch (error) {
+              console.warn('Image understanding failed; continuing with a safe generic photo reply.', error);
+              userText = note || copy.sharedAPhoto;
+            }
+          }
         }
 
         if (!sourceMessageStillExists()) return;
@@ -2071,11 +2633,22 @@ export const useNanaStore = create<NanaStore>()(
             : null;
 
           if (replyType === 'voice') {
+            const voiceProvider = resolveVoiceProvider({
+              voiceProviderEnabled: state.voiceProviderEnabled,
+              voiceApiUrl: state.voiceApiUrl,
+              voiceApiKey: state.voiceApiKey,
+              voiceSttModel: state.voiceSttModel,
+              voiceTtsModel: state.voiceTtsModel,
+              chatApiUrl: state.apiUrl,
+              chatApiKey: state.apiKey,
+              chatModel: state.selectedModel,
+            });
             const speechAudio = await synthesizeSpeechAudio({
               text: normalizedReplyText,
-              apiUrl: state.apiUrl,
-              apiKey: state.apiKey,
+              apiUrl: voiceProvider.tts.apiUrl,
+              apiKey: voiceProvider.tts.apiKey,
               voiceProfileId: activeChar?.voiceProfileId,
+              ttsModel: voiceProvider.tts.model,
             });
             if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
             if (speechAudio.phase === 'ready' && speechAudio.localUri) {
@@ -2096,6 +2669,24 @@ export const useNanaStore = create<NanaStore>()(
               }));
             }
           }
+
+          const selectedCharacterMedia = activeChar?.autonomousImageSharingEnabled
+            ? selectCharacterMediaAsset({
+                characterId: activeChar.id,
+                assets: state.characterMediaAssets,
+                sendHistory: state.characterMediaSendHistory,
+                intent: inferCharacterMediaIntent(`${userText} ${normalizedReplyText}`),
+                tags: `${userText} ${normalizedReplyText}`
+                  .toLowerCase()
+                  .split(/[^\p{L}\p{N}]+/u)
+                  .filter(Boolean)
+                  .slice(0, 12),
+                policy: { enabled: true },
+              }).asset
+            : null;
+          const selectedCharacterSticker = type === 'sticker'
+            ? chooseStickerForSemantic(state.stickers, normalizedReplyText, chatId)
+            : null;
 
           let didCommitAll = false;
           for (const [messageIndex, messageText] of deliveryMessages.entries()) {
@@ -2134,9 +2725,14 @@ export const useNanaStore = create<NanaStore>()(
                     sourceEventId: String(sourceMessageId),
                     title: traceTitle,
                     summary: `${traceUserName}: ${userText} / ${traceCharacterName}: ${normalizedReplyText}`,
-                    mediaUris: finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
-                    recallWeight: type === 'voice' ? 0.7 : 0.5,
-                    state: 'digested',
+                    mediaUris: type === 'sticker' && selectedSticker
+                      ? [selectedSticker.uri]
+                      : finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
+                    remember: type !== 'sticker' && (type !== 'image' || imageAnalysisShouldRemember),
+                    recallWeight: type === 'sticker' ? 0.1 : type === 'voice' ? 0.7 : 0.5,
+                    state: type === 'sticker' || (type === 'image' && !imageAnalysisShouldRemember)
+                      ? 'ignored'
+                      : 'digested',
                   })),
                   proactiveChatSchedules: {
                     ...s.proactiveChatSchedules,
@@ -2190,6 +2786,63 @@ export const useNanaStore = create<NanaStore>()(
             if (!isLastMessage) triggerHaptic('light');
           }
           if (!didCommitAll) return;
+          if (selectedCharacterMedia) {
+            const mediaSentAt = Date.now();
+            set(current => ({
+              chatHistory: {
+                ...current.chatHistory,
+                [chatId]: [...(current.chatHistory[chatId] || []), {
+                  id: nextMessageId(),
+                  sender: 'char',
+                  text: copy.sharedAPhoto,
+                  time: new Date(mediaSentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  type: 'image',
+                  imageUri: selectedCharacterMedia.uri,
+                  generationSource,
+                  createdAt: mediaSentAt,
+                }],
+              },
+              characterMediaSendHistory: [
+                ...current.characterMediaSendHistory,
+                {
+                  assetId: selectedCharacterMedia.id,
+                  characterId: chatId,
+                  sentAt: mediaSentAt,
+                },
+              ].slice(-500),
+              relationshipTraces: upsertRelationshipTrace(current.relationshipTraces, createRelationshipTrace({
+                characterId: chatId,
+                source: 'photo',
+                sourceEventId: `character-photo:${selectedCharacterMedia.id}:${mediaSentAt}`,
+                title: copy.sharedPhoto,
+                summary: copy.language === 'zh'
+                  ? `${activeChar?.name || '角色'}给${state.myName || '你'}发来一张图片。`
+                  : `${activeChar?.name || 'The character'} shared a photo with ${state.myName || 'you'}.`,
+                mediaUris: [selectedCharacterMedia.uri],
+                recallWeight: 0.45,
+                state: 'digested',
+              })),
+            }));
+          }
+          if (selectedCharacterSticker) {
+            set(current => ({
+              chatHistory: {
+                ...current.chatHistory,
+                [chatId]: [...(current.chatHistory[chatId] || []), {
+                  id: nextMessageId(),
+                  sender: 'char',
+                  text: `[Sticker: ${selectedCharacterSticker.name}]`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  type: 'sticker',
+                  stickerId: selectedCharacterSticker.id,
+                  stickerUri: selectedCharacterSticker.uri,
+                  stickerName: selectedCharacterSticker.name,
+                  generationSource,
+                  createdAt: Date.now(),
+                }],
+              },
+            }));
+          }
           triggerHaptic('medium');
           set({
             islandNotification: {
@@ -2226,9 +2879,14 @@ export const useNanaStore = create<NanaStore>()(
                 sourceEventId: String(sourceMessageId),
                 title: traceTitle,
                 summary: initialSummary,
-                mediaUris: finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
-                recallWeight: type === 'voice' ? 0.5 : 0.25,
-                state: 'failed',
+                mediaUris: type === 'sticker' && selectedSticker
+                  ? [selectedSticker.uri]
+                  : finalizedMediaCapture?.localUri ? [finalizedMediaCapture.localUri] : undefined,
+                remember: type !== 'sticker' && (type !== 'image' || imageAnalysisShouldRemember),
+                recallWeight: type === 'sticker' ? 0.1 : type === 'voice' ? 0.5 : 0.25,
+                state: type === 'sticker' || (type === 'image' && !imageAnalysisShouldRemember)
+                  ? 'ignored'
+                  : 'failed',
               })),
             };
           });
@@ -2427,6 +3085,153 @@ export const useNanaStore = create<NanaStore>()(
         }
       },
 
+      runProactiveMomentsHeartbeat: async (now = Date.now()) => {
+        if (proactiveMomentHeartbeatInFlight) return;
+        proactiveMomentHeartbeatInFlight = true;
+        try {
+          set(state => {
+            let schedules = state.proactiveMomentSchedules;
+            let changed = false;
+            const friendIds = new Set(state.friends);
+            for (const character of state.characters) {
+              const mode = character.proactiveMomentsMode || 'occasional';
+              if (!friendIds.has(character.id) || mode === 'off' || schedules[character.id]) continue;
+              const schedule = createInitialMomentSchedule(character.id, mode, now);
+              if (!schedule) continue;
+              if (!changed) schedules = { ...schedules };
+              schedules[character.id] = schedule;
+              changed = true;
+            }
+            return changed ? { proactiveMomentSchedules: schedules } : {};
+          });
+
+          const state = get();
+          if (
+            state.callOverlay.show
+            || Object.keys(state.pendingChatRequests).length > 0
+            || Object.keys(state.pendingPaymentReactions).length > 0
+          ) return;
+          const character = selectDueMomentCandidate({
+            characters: state.characters,
+            friends: state.friends,
+            blockedUsers: state.blockedUsers,
+            schedules: state.proactiveMomentSchedules,
+            appState: 'active',
+            pendingCharacterIds: state.pendingMomentCharacterIds,
+            now,
+          });
+          if (!character) return;
+          const schedule = state.proactiveMomentSchedules[character.id];
+          if (!schedule) return;
+          set(current => ({
+            pendingMomentCharacterIds: current.pendingMomentCharacterIds.includes(character.id)
+              ? current.pendingMomentCharacterIds
+              : [...current.pendingMomentCharacterIds, character.id],
+          }));
+
+          const focusEvent = selectMomentFocusEvent(
+            state.relationshipTraces,
+            character.id,
+            schedule,
+            now,
+          );
+          const localDraft = createLocalMomentDraft({
+            characterId: character.id,
+            characterName: character.name,
+            personaDescription: character.desc,
+            recentEventSummary: focusEvent?.summary,
+            focusTraceId: focusEvent?.id,
+            language: state.themeConfig.language,
+            now,
+          });
+          let text = localDraft.text;
+          let generationSource: Moment['generationSource'] = 'characterLocal';
+          if (state.apiKey.trim()) {
+            try {
+              text = await generateMomentPost({
+                character,
+                userName: state.myName,
+                recentChat: state.chatHistory[character.id] || [],
+                relationshipTraces: state.relationshipTraces,
+                focusEvent: focusEvent || undefined,
+                language: state.themeConfig.language,
+                apiUrl: state.apiUrl,
+                apiKey: state.apiKey,
+                selectedModel: state.selectedModel,
+              });
+              generationSource = 'characterRemote';
+            } catch (error) {
+              console.warn('Moment post generation failed; using local persona fallback.', error);
+            }
+          }
+
+          const momentId = `moment:${character.id}:${now}:${Math.random().toString(36).slice(2, 8)}`;
+          let committed = false;
+          set(current => {
+            const liveCharacter = current.characters.find(item => item.id === character.id);
+            const liveSchedule = current.proactiveMomentSchedules[character.id];
+            const mode = liveCharacter?.proactiveMomentsMode || 'occasional';
+            const pendingMomentCharacterIds = current.pendingMomentCharacterIds
+              .filter(id => id !== character.id);
+            if (
+              !liveCharacter
+              || mode === 'off'
+              || !current.friends.includes(character.id)
+              || current.blockedUsers.includes(character.id)
+              || liveSchedule?.nextDueAt !== schedule.nextDueAt
+            ) return { pendingMomentCharacterIds };
+            const nextSchedule = rescheduleAfterMomentPost(
+              liveSchedule,
+              character.id,
+              mode,
+              now,
+              focusEvent?.id,
+            );
+            if (!nextSchedule) return { pendingMomentCharacterIds };
+            committed = true;
+            return {
+              momentsList: [{
+                id: momentId,
+                authorId: liveCharacter.id,
+                authorName: liveCharacter.name,
+                avatar: liveCharacter.avatar,
+                text,
+                images: [],
+                timestamp: now,
+                likes: [],
+                comments: [],
+                generationSource,
+                ...(focusEvent ? { focusTraceId: focusEvent.id } : {}),
+              }, ...current.momentsList].slice(0, 500),
+              proactiveMomentSchedules: {
+                ...current.proactiveMomentSchedules,
+                [character.id]: nextSchedule,
+              },
+              pendingMomentCharacterIds,
+            };
+          });
+          if (committed) {
+            set({
+              islandNotification: {
+                title: character.name,
+                desc: runtimeCopyFor(state.themeConfig.language).language === 'zh'
+                  ? '发布了一条朋友圈'
+                  : 'Posted a new moment',
+                icon: character.avatar,
+                status: 'success',
+              },
+            });
+            setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2400);
+          }
+        } finally {
+          const pending = get().pendingMomentCharacterIds;
+          if (pending.length > 0) {
+            set({ pendingMomentCharacterIds: [] });
+          }
+          proactiveMomentHeartbeatInFlight = false;
+        }
+      },
+
       retryChatMessage: async (errorMessageId) => {
         const state = get();
         const chatId = state.activeChatId;
@@ -2527,6 +3332,11 @@ export const useNanaStore = create<NanaStore>()(
       },
 
       startOutgoingCall: (type) => {
+        cancelActiveCallVoiceRequest();
+        cancelActiveVoicePreview();
+        stopSharedVoiceMessagePlayback();
+        stopOneShotAudioPlayback();
+        stopSpeechSynthesis();
         const state = get();
         if (!state.activeChatId) return;
         const copy = runtimeCopyFor(state.themeConfig.language);
@@ -2559,6 +3369,11 @@ export const useNanaStore = create<NanaStore>()(
       },
 
       startIncomingCall: (type, characterId) => {
+        cancelActiveCallVoiceRequest();
+        cancelActiveVoicePreview();
+        stopSharedVoiceMessagePlayback();
+        stopOneShotAudioPlayback();
+        stopSpeechSynthesis();
         const state = get();
         const copy = runtimeCopyFor(state.themeConfig.language);
         const activeChar = state.characters.find(c => c.id === characterId);
@@ -2598,13 +3413,36 @@ export const useNanaStore = create<NanaStore>()(
         });
       },
 
+      invalidateActiveCallVoiceInput: (startedAt) => {
+        cancelActiveCallVoiceRequest();
+        stopOneShotAudioPlayback();
+        stopSpeechSynthesis();
+        set(state => {
+          const overlay = state.callOverlay;
+          if (
+            !overlay.show
+            || (startedAt !== undefined && overlay.startedAt !== startedAt)
+          ) return {};
+          return {
+            callOverlay: {
+              ...overlay,
+              inputEpoch: overlay.inputEpoch + 1,
+              speechPhase: overlay.status === 'connected' ? 'idle' as const : overlay.speechPhase,
+              errorMessage: undefined,
+            },
+          };
+        });
+      },
+
       endActiveCall: (status = 'completed') => {
         const state = get();
         const overlay = state.callOverlay;
         if (!overlay.show) return;
 
         stopOneShotAudioPlayback();
+        stopSharedVoiceMessagePlayback();
         stopSpeechSynthesis();
+        cancelActiveCallVoiceRequest();
         const endedAt = Date.now();
         const normalizedStatus: CallLog['status'] = overlay.status === 'incoming' && status === 'completed'
           ? 'missed'
@@ -2658,10 +3496,13 @@ export const useNanaStore = create<NanaStore>()(
       },
 
       sendCallSpeech: async (capture) => {
+        cancelActiveCallVoiceRequest();
         const state = get();
         const copy = runtimeCopyFor(state.themeConfig.language);
         const overlay = state.callOverlay;
         if (!overlay.show || overlay.status !== 'connected') return;
+        const requestController = new AbortController();
+        activeCallVoiceRequestController = requestController;
         const activeChar = state.characters.find(c => c.id === (overlay.characterId || state.activeChatId));
         const activeChatId = overlay.characterId || state.activeChatId;
         const callSessionStartedAt = overlay.startedAt;
@@ -2673,6 +3514,16 @@ export const useNanaStore = create<NanaStore>()(
           && candidate.characterId === overlay.characterId
           && candidate.inputEpoch === callInputEpoch
         );
+        const voiceProvider = resolveVoiceProvider({
+          voiceProviderEnabled: state.voiceProviderEnabled,
+          voiceApiUrl: state.voiceApiUrl,
+          voiceApiKey: state.voiceApiKey,
+          voiceSttModel: state.voiceSttModel,
+          voiceTtsModel: state.voiceTtsModel,
+          chatApiUrl: state.apiUrl,
+          chatApiKey: state.apiKey,
+          chatModel: state.selectedModel,
+        });
 
         set({
           callOverlay: { ...overlay, speechPhase: 'transcribing' },
@@ -2687,10 +3538,12 @@ export const useNanaStore = create<NanaStore>()(
         try {
           const transcriptCapture = await transcribeAudioCapture({
             capture,
-            apiUrl: state.apiUrl,
-            apiKey: state.apiKey,
-            selectedModel: state.selectedModel,
+            apiUrl: voiceProvider.stt.apiUrl,
+            apiKey: voiceProvider.stt.apiKey,
+            selectedModel: voiceProvider.stt.model,
+            sttModel: voiceProvider.stt.model,
             language: state.speechLanguage || 'zh-CN',
+            signal: requestController.signal,
           });
 
           if (transcriptCapture.phase !== 'ready' || !transcriptCapture.transcript?.trim()) {
@@ -2759,6 +3612,7 @@ export const useNanaStore = create<NanaStore>()(
             apiKey: state.apiKey,
             selectedModel: state.selectedModel,
             replaceMacros,
+            signal: requestController.signal,
           });
 
           const currentOverlay = get().callOverlay;
@@ -2770,24 +3624,43 @@ export const useNanaStore = create<NanaStore>()(
           if (replyType === 'voice') {
             const speechAudio = await synthesizeSpeechAudio({
               text: replyText,
-              apiUrl: state.apiUrl,
-              apiKey: state.apiKey,
+              apiUrl: voiceProvider.tts.apiUrl,
+              apiKey: voiceProvider.tts.apiKey,
               voiceProfileId: activeChar?.voiceProfileId,
+              ttsModel: voiceProvider.tts.model,
+              signal: requestController.signal,
             });
-            if (!isCurrentCallSession(get().callOverlay)) return;
+            if (!isCurrentCallSession(get().callOverlay)) {
+              if (speechAudio.localUri) deletePersistedMediaFile(speechAudio.localUri, 'audio');
+              return;
+            }
             if (speechAudio.phase === 'ready' && speechAudio.localUri) {
-              replyCapture = resolveSpeechToTextResult({
-                transcript: replyText,
-                localUri: speechAudio.localUri,
-                durationSec: speechAudio.durationSec,
-              });
-              await playAudioUriOnce(speechAudio.localUri, { waitForCompletion: true });
+              let played = false;
+              try {
+                played = await playAudioUriOnce(speechAudio.localUri, { waitForCompletion: true });
+              } finally {
+                deletePersistedMediaFile(speechAudio.localUri, 'audio');
+              }
+              if (!isCurrentCallSession(get().callOverlay)) return;
+              if (!played) {
+                const deviceSpeech = await speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
+                  character: activeChar,
+                  text: replyText,
+                  language: state.speechLanguage || 'zh-CN',
+                }), { waitForCompletion: true });
+                if (deviceSpeech.phase !== 'ready') {
+                  throw new Error(deviceSpeech.errorMessage || copy.callSpeechFailed);
+                }
+              }
             } else {
-              await speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
+              const deviceSpeech = await speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
                 character: activeChar,
                 text: replyText,
                 language: state.speechLanguage || 'zh-CN',
               }), { waitForCompletion: true });
+              if (deviceSpeech.phase !== 'ready') {
+                throw new Error(deviceSpeech.errorMessage || copy.callSpeechFailed);
+              }
             }
           }
 
@@ -2836,6 +3709,135 @@ export const useNanaStore = create<NanaStore>()(
           if (!didCommit) return;
           triggerHaptic('error');
           setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2600);
+        } finally {
+          if (activeCallVoiceRequestController === requestController) {
+            activeCallVoiceRequestController = null;
+          }
+        }
+      },
+
+      previewCharacterVoice: async (input = {}) => {
+        cancelActiveVoicePreview();
+        const previewController = new AbortController();
+        activeVoicePreviewController = previewController;
+        const state = get();
+        const activeChar = state.characters.find(character => (
+          character.id === (input.characterId || state.editingCharId || state.activeProfileId || state.activeChatId)
+        ));
+        const characterName = input.characterName?.trim() || activeChar?.name || 'Nana';
+        const voiceProfileId = input.voiceProfileId?.trim()
+          || activeChar?.voiceProfileId
+          || 'alloy';
+        const isChinese = state.themeConfig.language === 'zh';
+        const sampleText = isChinese
+          ? `你好，我是${characterName}。以后，就用这个声音陪你说话。`
+          : `Hi, I'm ${characterName}. I'll use this voice when we talk.`;
+        const voiceProvider = resolveVoiceProvider({
+          voiceProviderEnabled: state.voiceProviderEnabled,
+          voiceApiUrl: state.voiceApiUrl,
+          voiceApiKey: state.voiceApiKey,
+          voiceSttModel: state.voiceSttModel,
+          voiceTtsModel: state.voiceTtsModel,
+          chatApiUrl: state.apiUrl,
+          chatApiKey: state.apiKey,
+          chatModel: state.selectedModel,
+        });
+
+        stopOneShotAudioPlayback();
+        await stopSpeechSynthesis();
+        set({
+          islandNotification: {
+            title: characterName,
+            desc: isChinese ? '正在准备语音试听…' : 'Preparing voice preview…',
+            icon: activeChar?.avatar,
+            status: 'processing',
+          },
+        });
+
+        try {
+          const remoteAudio = await synthesizeSpeechAudio({
+            text: sampleText,
+            apiUrl: voiceProvider.tts.apiUrl,
+            apiKey: voiceProvider.tts.apiKey,
+            voiceProfileId,
+            ttsModel: voiceProvider.tts.model,
+            signal: previewController.signal,
+          });
+          if (previewController.signal.aborted) {
+            if (remoteAudio.localUri) deletePersistedMediaFile(remoteAudio.localUri, 'audio');
+            return false;
+          }
+          if (remoteAudio.phase === 'ready' && remoteAudio.localUri) {
+            set({
+              islandNotification: {
+                title: characterName,
+                desc: isChinese ? '正在播放远程音色' : 'Playing remote voice',
+                icon: activeChar?.avatar,
+                status: 'success',
+              },
+            });
+            let played = false;
+            try {
+              played = await playAudioUriOnce(remoteAudio.localUri, { waitForCompletion: true });
+            } finally {
+              deletePersistedMediaFile(remoteAudio.localUri, 'audio');
+            }
+            if (previewController.signal.aborted) return false;
+            if (played) {
+              setTimeout(() => useNanaStore.setState({ islandNotification: null }), 900);
+              return true;
+            }
+          }
+
+          const previewCharacter: Character = activeChar
+            ? {
+                ...activeChar,
+                supportsVoiceReply: true,
+                voiceProfileId,
+              }
+            : {
+                id: 'voice-preview',
+                name: characterName,
+                avatar: '',
+                desc: '',
+                supportsVoiceReply: true,
+                voiceProfileId,
+              };
+          const deviceSpeech = await speakSpeechSynthesisPlan(createSpeechSynthesisPlan({
+            character: previewCharacter,
+            text: sampleText,
+            language: state.speechLanguage || (isChinese ? 'zh-CN' : 'en-US'),
+          }));
+          if (deviceSpeech.phase !== 'ready') {
+            throw new Error(deviceSpeech.errorMessage || (isChinese ? '设备语音不可用' : 'Device speech is unavailable'));
+          }
+          set({
+            islandNotification: {
+              title: characterName,
+              desc: isChinese ? '远程音色不可用，已使用设备语音试听' : 'Remote voice unavailable; using device speech',
+              icon: activeChar?.avatar,
+              status: 'success',
+            },
+          });
+          setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2600);
+          return true;
+        } catch (error) {
+          set({
+            islandNotification: {
+              title: characterName,
+              desc: error instanceof Error
+                ? error.message
+                : isChinese ? '语音试听失败' : 'Voice preview failed',
+              icon: activeChar?.avatar,
+              status: 'error',
+            },
+          });
+          setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2800);
+          return false;
+        } finally {
+          if (activeVoicePreviewController === previewController) {
+            activeVoicePreviewController = null;
+          }
         }
       },
 
@@ -2855,7 +3857,14 @@ export const useNanaStore = create<NanaStore>()(
       syncTempState: () => {
         const s = get();
         if (s.activeApp === 'settings') {
-          set({ tempApiUrl: s.apiUrl || '', tempApiKey: s.apiKey || '' });
+          set({
+            tempApiUrl: s.apiUrl || '',
+            tempApiKey: s.apiKey || '',
+            tempVoiceApiUrl: s.voiceApiUrl || '',
+            tempVoiceApiKey: s.voiceApiKey || '',
+            tempVoiceSttModel: s.voiceSttModel || 'gpt-4o-mini-transcribe',
+            tempVoiceTtsModel: s.voiceTtsModel || 'tts-1',
+          });
         }
         if (s.activeApp === 'user') {
           set({ tempMyName: s.myName || '', tempMyAvatar: s.myAvatar || '', tempMyDesc: s.myDesc || '' });

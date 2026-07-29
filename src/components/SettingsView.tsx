@@ -1,9 +1,18 @@
 import { useState } from 'react';
-import { Alert, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, ScrollView, Switch, Text, TextInput, View } from 'react-native';
+import { AudioLines, BellRing } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { exportData, importData, clearAllData } from '../services/storage';
-import { clearApiKey, saveApiKey, usesNativeSecretStorage } from '../services/secretStore';
+import {
+  clearApiKey,
+  clearVoiceApiKey,
+  saveApiKey,
+  saveVoiceApiKey,
+  usesNativeSecretStorage,
+} from '../services/secretStore';
+import { requestProactiveNotificationPermission } from '../services/proactiveNotificationRuntime';
+import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { AnimatedPressable } from './primitives';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 
@@ -84,9 +93,30 @@ export function SettingsView() {
   const selectedModel = useNanaStore(s => s.selectedModel);
   const models = useNanaStore(s => s.models);
   const isLoadingModels = useNanaStore(s => s.isLoadingModels);
+  const proactiveNotificationsEnabled = useNanaStore(s => s.proactiveNotificationsEnabled);
+  const voiceProviderEnabled = useNanaStore(s => s.voiceProviderEnabled);
+  const tempVoiceApiUrl = useNanaStore(s => s.tempVoiceApiUrl);
+  const tempVoiceApiKey = useNanaStore(s => s.tempVoiceApiKey);
+  const tempVoiceSttModel = useNanaStore(s => s.tempVoiceSttModel);
+  const tempVoiceTtsModel = useNanaStore(s => s.tempVoiceTtsModel);
+  const autoTTS = useNanaStore(s => s.autoTTS);
+  const speechLanguage = useNanaStore(s => s.speechLanguage);
   const set = useNanaStore.setState;
   const [isSavingApi, setIsSavingApi] = useState(false);
+  const [isChangingNotifications, setIsChangingNotifications] = useState(false);
   const [apiKeyStatus, setApiKeyStatus] = useState('');
+  const [isSavingVoice, setIsSavingVoice] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState('');
+  const voiceProvider = resolveVoiceProvider({
+    voiceProviderEnabled,
+    voiceApiUrl: tempVoiceApiUrl,
+    voiceApiKey: tempVoiceApiKey,
+    voiceSttModel: tempVoiceSttModel,
+    voiceTtsModel: tempVoiceTtsModel,
+    chatApiUrl: tempApiUrl,
+    chatApiKey: tempApiKey,
+    chatModel: selectedModel,
+  });
 
   const handleSaveApiConfig = async () => {
     setIsSavingApi(true);
@@ -127,12 +157,112 @@ export function SettingsView() {
     }
   };
 
+  const persistVoiceSettings = async (showAlert: boolean) => {
+    const voiceApiKey = await saveVoiceApiKey(tempVoiceApiKey);
+    set({
+      voiceProviderEnabled,
+      voiceApiUrl: tempVoiceApiUrl.trim(),
+      voiceApiKey,
+      voiceSttModel: tempVoiceSttModel.trim() || 'gpt-4o-mini-transcribe',
+      voiceTtsModel: tempVoiceTtsModel.trim() || 'tts-1',
+      tempVoiceApiKey: voiceApiKey,
+    });
+    setVoiceStatus(t.voiceSettingsSaved);
+    if (showAlert) Alert.alert(t.voiceService, t.voiceSettingsSaved);
+  };
+
+  const handleSaveVoiceConfig = async () => {
+    setIsSavingVoice(true);
+    setVoiceStatus('');
+    try {
+      await persistVoiceSettings(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.voiceNotConfigured;
+      setVoiceStatus(message);
+      Alert.alert(t.voiceService, message);
+    } finally {
+      setIsSavingVoice(false);
+    }
+  };
+
+  const handleClearVoiceConfig = async () => {
+    setIsSavingVoice(true);
+    setVoiceStatus('');
+    try {
+      await clearVoiceApiKey();
+      set({
+        voiceProviderEnabled: false,
+        voiceApiUrl: '',
+        voiceApiKey: '',
+        voiceSttModel: 'gpt-4o-mini-transcribe',
+        voiceTtsModel: 'tts-1',
+        tempVoiceApiUrl: '',
+        tempVoiceApiKey: '',
+        tempVoiceSttModel: 'gpt-4o-mini-transcribe',
+        tempVoiceTtsModel: 'tts-1',
+      });
+      setVoiceStatus(t.voiceSettingsCleared);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.voiceNotConfigured;
+      setVoiceStatus(message);
+      Alert.alert(t.voiceService, message);
+    } finally {
+      setIsSavingVoice(false);
+    }
+  };
+
+  const handleTestVoice = async () => {
+    setIsSavingVoice(true);
+    setVoiceStatus('');
+    try {
+      await persistVoiceSettings(false);
+      await useNanaStore.getState().previewCharacterVoice();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t.voiceNotConfigured;
+      setVoiceStatus(message);
+    } finally {
+      setIsSavingVoice(false);
+    }
+  };
+
   const handleClearAllData = async () => {
     try {
       await clearAllData();
       Alert.alert('Data Cleared', 'Nana was reset on this device, including the securely stored API Key.');
     } catch (error) {
       Alert.alert('Clear Data Error', error instanceof Error ? error.message : 'Nana could not clear all local data.');
+    }
+  };
+
+  const handleProactiveNotificationsChange = async (enabled: boolean) => {
+    if (!enabled) {
+      set({ proactiveNotificationsEnabled: false });
+      return;
+    }
+    setIsChangingNotifications(true);
+    try {
+      const permission = await requestProactiveNotificationPermission();
+      if (permission === 'granted') {
+        set({ proactiveNotificationsEnabled: true });
+        return;
+      }
+      set({ proactiveNotificationsEnabled: false });
+      Alert.alert(
+        t.proactiveNotifications,
+        permission === 'unavailable'
+          ? t.proactiveNotificationsUnavailable
+          : t.proactiveNotificationsPermissionDenied,
+      );
+    } catch (error) {
+      set({ proactiveNotificationsEnabled: false });
+      Alert.alert(
+        t.proactiveNotifications,
+        error instanceof Error
+          ? error.message
+          : t.proactiveNotificationsPermissionDenied,
+      );
+    } finally {
+      setIsChangingNotifications(false);
     }
   };
 
@@ -207,6 +337,193 @@ export function SettingsView() {
               })}
             </View>
           ) : null}
+        </NeumorphicSurface>
+
+        <NeumorphicSurface
+          testID="settings-voice-service"
+          depth="raised"
+          tone="lavender"
+          radius={22}
+          fill={false}
+          contentStyle={{ padding: 16, gap: 12 }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <AudioLines size={18} color={neumorphicPalette.onLightPrimary} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 16, fontWeight: '800' }}>
+                {t.voiceService}
+              </Text>
+              <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12, lineHeight: 17, marginTop: 3 }}>
+                {t.voiceServiceDesc}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 14, fontWeight: '800' }}>
+                {t.separateVoiceService}
+              </Text>
+              <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 16, marginTop: 3 }}>
+                {voiceProviderEnabled ? t.separateVoiceServiceHint : t.voiceUsingChatService}
+              </Text>
+            </View>
+            <Switch
+              testID="separate-voice-provider-switch"
+              accessibilityLabel={t.separateVoiceService}
+              value={voiceProviderEnabled}
+              onValueChange={enabled => {
+                set({ voiceProviderEnabled: enabled });
+              }}
+              trackColor={{ false: '#C8BDD0', true: '#E8A7BA' }}
+              thumbColor="#3A293D"
+            />
+          </View>
+
+          {voiceProviderEnabled ? (
+            <View>
+              <SettingsField
+                label={t.voiceApiUrl}
+                value={tempVoiceApiUrl}
+                onChangeText={value => set({ tempVoiceApiUrl: value })}
+                placeholder="https://api.openai.com"
+              />
+              <SettingsField
+                label={t.voiceApiKey}
+                value={tempVoiceApiKey}
+                onChangeText={value => set({ tempVoiceApiKey: value })}
+                placeholder="sk-..."
+                secureTextEntry
+              />
+              <SettingsField
+                label={t.voiceSttModel}
+                value={tempVoiceSttModel}
+                onChangeText={value => set({ tempVoiceSttModel: value })}
+                placeholder="gpt-4o-mini-transcribe"
+              />
+              <SettingsField
+                label={t.voiceTtsModel}
+                value={tempVoiceTtsModel}
+                onChangeText={value => set({ tempVoiceTtsModel: value })}
+                placeholder="tts-1"
+              />
+            </View>
+          ) : null}
+
+          <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 14, fontWeight: '800' }}>
+                {t.autoPlayVoiceReplies}
+              </Text>
+              <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 16, marginTop: 3 }}>
+                {voiceProvider.ttsDiagnostic.status === 'ready'
+                  ? t.voiceRemoteReady
+                  : t.voiceDeviceFallback}
+              </Text>
+            </View>
+            <Switch
+              testID="auto-tts-switch"
+              accessibilityLabel={t.autoPlayVoiceReplies}
+              value={autoTTS}
+              onValueChange={enabled => {
+                set({ autoTTS: enabled });
+              }}
+              trackColor={{ false: '#C8BDD0', true: '#E8A7BA' }}
+              thumbColor="#3A293D"
+            />
+          </View>
+
+          <SettingsField
+            label={t.speechLanguage}
+            value={speechLanguage}
+            onChangeText={value => set({ speechLanguage: value })}
+            placeholder="zh-CN / en-US"
+          />
+
+          <Text
+            selectable
+            style={{
+              color: voiceProvider.sttDiagnostic.status === 'ready'
+                ? neumorphicPalette.onLightSecondary
+                : neumorphicPalette.berry,
+              fontSize: 11.5,
+              lineHeight: 17,
+            }}
+          >
+            {voiceProvider.sttDiagnostic.status === 'ready'
+              ? `${t.voiceSttModel}: ${voiceProvider.stt.model}`
+              : t.voiceNotConfigured}
+          </Text>
+
+          <SettingsButton
+            label={t.testVoice}
+            onPress={() => { void handleTestVoice(); }}
+            disabled={isSavingVoice}
+          />
+          <View style={{ flexDirection: 'row', gap: 9 }}>
+            <View style={{ flex: 1 }}>
+              <SettingsButton
+                label={isSavingVoice ? t.processing : t.save}
+                onPress={() => { void handleSaveVoiceConfig(); }}
+                tone="pinkGold"
+                disabled={isSavingVoice}
+              />
+            </View>
+            {voiceProviderEnabled ? (
+              <View style={{ flex: 1 }}>
+                <SettingsButton
+                  label={t.clear}
+                  onPress={() => { void handleClearVoiceConfig(); }}
+                  tone="berry"
+                  disabled={isSavingVoice}
+                />
+              </View>
+            ) : null}
+          </View>
+
+          {voiceStatus ? (
+            <Text selectable style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12, lineHeight: 17 }}>
+              {voiceStatus}
+            </Text>
+          ) : null}
+        </NeumorphicSurface>
+
+        <NeumorphicSurface
+          testID="settings-proactive-notifications"
+          depth="raised"
+          tone="lavender"
+          radius={22}
+          fill={false}
+          contentStyle={{ padding: 16, gap: 10 }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <BellRing size={17} color={neumorphicPalette.onLightPrimary} />
+                <Text style={{ flex: 1, color: neumorphicPalette.onLightPrimary, fontSize: 15, fontWeight: '800' }}>
+                  {t.proactiveNotifications}
+                </Text>
+              </View>
+              <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12, lineHeight: 17 }}>
+                {t.proactiveNotificationsDesc}
+              </Text>
+            </View>
+            <Switch
+              testID="proactive-notifications-switch"
+              accessibilityLabel={t.proactiveNotifications}
+              accessibilityHint={t.proactiveNotificationsCostPolicy}
+              value={proactiveNotificationsEnabled}
+              disabled={isChangingNotifications}
+              onValueChange={enabled => {
+                void handleProactiveNotificationsChange(enabled);
+              }}
+              trackColor={{ false: '#C8BDD0', true: '#E8A7BA' }}
+              thumbColor="#3A293D"
+            />
+          </View>
+          <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 17 }}>
+            {t.proactiveNotificationsCostPolicy}
+          </Text>
         </NeumorphicSurface>
 
         <NeumorphicSurface

@@ -95,7 +95,7 @@ const storage = loadTypeScriptModule('src/services/storage.ts', {
   '@react-native-async-storage/async-storage': asyncStorageMock,
   'react-native': { Alert: { alert() {} }, Share: { share: async () => undefined } },
   '../stores/nanaStore': {
-    NANA_PERSIST_VERSION: 9,
+    NANA_PERSIST_VERSION: 10,
     selectNanaPersistedState: state => state,
     useNanaStore: {
       setState() {},
@@ -160,21 +160,27 @@ const original = {
     myName: 'User',
     myAvatar: 'file:///doc/nana-media/avatars/user.jpg',
     apiKey: 'legacy-secret',
-    nested: [{ tempApiKey: 'nested-secret', safe: true }],
+    voiceApiKey: 'legacy-voice-secret',
+    nested: [{ tempApiKey: 'nested-secret', tempVoiceApiKey: 'nested-voice-secret', safe: true }],
   },
   version: 0,
 };
 const redacted = secretStore.redactSecrets(original);
 expect(original.state.apiKey === 'legacy-secret', 'redaction must not mutate the input object');
 expect(!('apiKey' in redacted.state), 'redaction must remove apiKey recursively');
+expect(!('voiceApiKey' in redacted.state), 'redaction must remove voiceApiKey recursively');
 expect(!('tempApiKey' in redacted.state.nested[0]), 'redaction must remove tempApiKey recursively');
+expect(!('tempVoiceApiKey' in redacted.state.nested[0]), 'redaction must remove tempVoiceApiKey recursively');
 expect(redacted.state.nested[0].safe === true, 'redaction must preserve non-secret values');
 
 const sanitized = secretStore.sanitizePersistedRootJson(JSON.stringify(original));
 expect(sanitized.legacyApiKey === 'legacy-secret', 'legacy migration must extract the old API key');
+expect(sanitized.legacyVoiceApiKey === 'legacy-voice-secret', 'legacy migration must extract the old voice API key');
 expect(sanitized.changed === true, 'legacy migration must report that persistent data changed');
 expect(!sanitized.raw.includes('legacy-secret'), 'sanitized persistent JSON must not contain the legacy key');
 expect(!sanitized.raw.includes('nested-secret'), 'sanitized persistent JSON must not contain nested temporary keys');
+expect(!sanitized.raw.includes('legacy-voice-secret'), 'sanitized persistent JSON must not contain the legacy voice key');
+expect(!sanitized.raw.includes('nested-voice-secret'), 'sanitized persistent JSON must not contain nested temporary voice keys');
 
 const webStorageWrites = [];
 const webSecretStore = loadTypeScriptModule('src/services/secretStore.ts', {
@@ -192,9 +198,11 @@ const webSecretStore = loadTypeScriptModule('src/services/secretStore.ts', {
 });
 const webHydration = await webSecretStore.prepareApiKeyForHydration();
 expect(webHydration.apiKey === 'legacy-secret', 'web migration must keep a legacy key for the current session');
+expect(webHydration.voiceApiKey === 'legacy-voice-secret', 'web migration must keep a legacy voice key for the current session');
 expect(webHydration.storage === 'session-memory', 'web keys must be session-memory only');
 expect(webStorageWrites.length === 1, 'web migration must rewrite the persisted root once');
 expect(!webStorageWrites[0][1].includes('legacy-secret'), 'web migration must remove the key from persistent browser storage');
+expect(!webStorageWrites[0][1].includes('legacy-voice-secret'), 'web migration must remove the voice key from persistent browser storage');
 
 let nativeSecureStoreWrites = 0;
 let nativeSanitizedRoot = '';
@@ -213,6 +221,7 @@ const nativeSecretStore = loadTypeScriptModule('src/services/secretStore.ts', {
 });
 const nativeHydration = await nativeSecretStore.prepareApiKeyForHydration();
 expect(nativeHydration.apiKey === 'newer-secure-key', 'an existing SecureStore key must take precedence over a stale legacy key');
+expect(nativeHydration.voiceApiKey === 'newer-secure-key', 'an existing secure voice key must take precedence over a stale legacy key');
 expect(nativeSecureStoreWrites === 0, 'legacy migration must not overwrite an existing SecureStore key');
 expect(!nativeSanitizedRoot.includes('legacy-secret'), 'native migration must still remove the stale plaintext key');
 

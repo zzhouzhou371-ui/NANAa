@@ -78,7 +78,10 @@ expect(overlaySource.includes('const currentCapture = nativeCaptureRef.current;'
 expect(overlaySource.includes("currentCapture.phase === 'capturing'"), 'a completed recorder start must still be recognized as capturing');
 expect(overlaySource.includes('captureIsActive\n        ? await finishCaptureRef.current()'), 'a VAD commit must stop the live recorder even after start ref is cleared');
 expect(overlaySource.includes('callOverlay.speechPhase === \'idle\''), 'automatic listening must only run while the character is idle');
-expect(overlaySource.includes('inputEpoch: current.inputEpoch + 1'), 'muting or backgrounding must invalidate pending call work');
+expect(
+  overlaySource.includes('invalidateActiveCallVoiceInput(callStartedAtRef.current)'),
+  'muting or backgrounding must delegate pending-call invalidation to the store',
+);
 expect(cameraSource.includes('facing?: CameraType;'), 'self camera preview must accept front/back facing');
 expect(cameraSource.includes("mirror: facing === 'front'"), 'only the front camera may be mirrored');
 expect(cameraSource.includes("createPermissionGate('videoPreview'"), 'camera preview must use its camera-only permission gate');

@@ -14,7 +14,10 @@ import { createWritableMediaFile } from './localMediaRepository';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 const OPENAI_STT_MODELS = ['gpt-4o-mini-transcribe', 'whisper-1'];
-const OPENAI_TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1'];
+const OPENAI_TTS_MODELS = ['tts-1', 'gpt-4o-mini-tts'];
+const MAX_TRANSCRIPTION_BYTES = 6 * 1024 * 1024;
+const MAX_SYNTHESIZED_AUDIO_BYTES = 8 * 1024 * 1024;
+const MAX_TTS_TEXT_LENGTH = 4_000;
 const OPENAI_VOICES = new Set([
   'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable',
   'nova', 'onyx', 'sage', 'shimmer', 'verse',
@@ -54,11 +57,17 @@ const openAIHeaders = (apiKey: string) => ({
   Authorization: `Bearer ${apiKey.trim()}`,
 });
 
+const candidateModels = (preferred: string | undefined, defaults: readonly string[]) => (
+  [...new Set([preferred?.trim(), ...defaults].filter((value): value is string => Boolean(value)))]
+);
+
 async function transcribeOpenAICompatible(params: {
   baseUrl: string;
   apiKey: string;
   capture: MediaCaptureResult;
   language: string;
+  model?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   if (!params.capture.localUri) {
     return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
@@ -68,7 +77,7 @@ async function transcribeOpenAICompatible(params: {
   const endpoint = `${openAIRootUrl(params.baseUrl)}/v1/audio/transcriptions`;
   let lastError = '';
 
-  for (const model of OPENAI_STT_MODELS) {
+  for (const model of candidateModels(params.model, OPENAI_STT_MODELS)) {
     const form = new FormData();
     form.append('file', file as unknown as Blob, fileNameForUri(params.capture.localUri));
     form.append('model', model);
@@ -78,7 +87,8 @@ async function transcribeOpenAICompatible(params: {
       method: 'POST',
       headers: openAIHeaders(params.apiKey),
       body: form,
-    });
+      signal: params.signal,
+    }, 30_000);
 
     if (response.ok) {
       const data = await response.json();
@@ -108,6 +118,7 @@ async function transcribeGeminiAudio(params: {
   model: string;
   capture: MediaCaptureResult;
   language: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   if (!params.capture.localUri) {
     return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
@@ -135,7 +146,8 @@ async function transcribeGeminiAudio(params: {
       }],
       generationConfig: { temperature: 0 },
     }),
-  });
+    signal: params.signal,
+  }, 30_000);
 
   if (!response.ok) {
     return {
@@ -161,6 +173,8 @@ async function transcribeAudioCaptureUnsafe(params: {
   apiKey: string;
   selectedModel: string;
   language: string;
+  sttModel?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   if (params.capture.phase === 'ready' && params.capture.transcript?.trim()) return params.capture;
   if (!params.capture.localUri) {
@@ -175,15 +189,44 @@ async function transcribeAudioCaptureUnsafe(params: {
       errorMessage: 'API key required for speech-to-text',
     };
   }
+  if (!params.apiUrl.trim()) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      localUri: params.capture.localUri,
+      durationSec: params.capture.durationSec,
+      errorMessage: 'Voice API URL is required for speech-to-text',
+    };
+  }
+  const audioFile = new File(params.capture.localUri);
+  if (!audioFile.exists) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      localUri: params.capture.localUri,
+      durationSec: params.capture.durationSec,
+      errorMessage: 'The recorded audio file is no longer available',
+    };
+  }
+  if (audioFile.size > MAX_TRANSCRIPTION_BYTES) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      localUri: params.capture.localUri,
+      durationSec: params.capture.durationSec,
+      errorMessage: 'The voice recording is too large to transcribe safely',
+    };
+  }
 
   const baseUrl = normalizeBaseUrl(params.apiUrl);
   if (isOfficialGeminiBaseUrl(baseUrl)) {
     return transcribeGeminiAudio({
       baseUrl,
       apiKey: params.apiKey,
-      model: params.selectedModel,
+      model: params.sttModel || params.selectedModel,
       capture: params.capture,
       language: params.language,
+      signal: params.signal,
     });
   }
 
@@ -192,6 +235,8 @@ async function transcribeAudioCaptureUnsafe(params: {
     apiKey: params.apiKey,
     capture: params.capture,
     language: params.language,
+    model: params.sttModel,
+    signal: params.signal,
   });
 }
 
@@ -201,6 +246,8 @@ export async function transcribeAudioCapture(params: {
   apiKey: string;
   selectedModel: string;
   language: string;
+  sttModel?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   try {
     return await transcribeAudioCaptureUnsafe(params);
@@ -215,9 +262,22 @@ export async function transcribeAudioCapture(params: {
   }
 }
 
-const normalizeOpenAIVoice = (voiceProfileId?: string) => {
-  const value = voiceProfileId?.trim().toLowerCase();
-  return value && OPENAI_VOICES.has(value) ? value : 'alloy';
+const resolveOpenAIVoice = (baseUrl: string, voiceProfileId?: string) => {
+  const value = voiceProfileId?.replace(/\s+/g, ' ').trim().slice(0, 80);
+  let officialOpenAI = false;
+  try {
+    officialOpenAI = new URL(baseUrl).hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    // The provider capability gate reports malformed URLs before this request.
+  }
+  if (!value) return { voice: 'alloy' };
+  if (officialOpenAI && !OPENAI_VOICES.has(value.toLowerCase())) {
+    return {
+      voice: '',
+      errorMessage: `"${value}" is not an OpenAI voice. Choose a supported voice or use device speech.`,
+    };
+  }
+  return { voice: officialOpenAI ? value.toLowerCase() : value };
 };
 
 async function synthesizeOpenAICompatible(params: {
@@ -225,11 +285,22 @@ async function synthesizeOpenAICompatible(params: {
   apiKey: string;
   text: string;
   voiceProfileId?: string;
+  model?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   const endpoint = `${openAIRootUrl(params.baseUrl)}/v1/audio/speech`;
+  const resolvedVoice = resolveOpenAIVoice(params.baseUrl, params.voiceProfileId);
+  if (!resolvedVoice.voice) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: params.text,
+      errorMessage: resolvedVoice.errorMessage,
+    };
+  }
   let lastError = '';
 
-  for (const model of OPENAI_TTS_MODELS) {
+  for (const model of candidateModels(params.model, OPENAI_TTS_MODELS)) {
     const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
@@ -239,13 +310,31 @@ async function synthesizeOpenAICompatible(params: {
       body: JSON.stringify({
         model,
         input: params.text,
-        voice: normalizeOpenAIVoice(params.voiceProfileId),
+        voice: resolvedVoice.voice,
         response_format: 'mp3',
       }),
-    });
+      signal: params.signal,
+    }, 30_000);
 
     if (response.ok) {
+      const declaredLength = Number(response.headers.get('content-length') || 0);
+      if (declaredLength > MAX_SYNTHESIZED_AUDIO_BYTES) {
+        return {
+          phase: 'failed',
+          mediaKind: 'audio',
+          transcript: params.text,
+          errorMessage: 'The synthesized voice response is too large',
+        };
+      }
       const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > MAX_SYNTHESIZED_AUDIO_BYTES) {
+        return {
+          phase: 'failed',
+          mediaKind: 'audio',
+          transcript: params.text,
+          errorMessage: 'The synthesized voice response is too large',
+        };
+      }
       const file = createWritableMediaFile('audio', `tts-${Date.now()}-${Math.round(Math.random() * 10000)}.mp3`);
       file.create({ overwrite: true, intermediates: true });
       file.write(bytes);
@@ -275,8 +364,10 @@ async function synthesizeSpeechAudioUnsafe(params: {
   apiUrl: string;
   apiKey: string;
   voiceProfileId?: string;
+  ttsModel?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
-  const text = params.text.trim();
+  const text = params.text.trim().slice(0, MAX_TTS_TEXT_LENGTH);
   if (!text) {
     return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No text to synthesize' };
   }
@@ -287,6 +378,15 @@ async function synthesizeSpeechAudioUnsafe(params: {
       transcript: text,
       durationSec: voiceDurationFromText(text),
       errorMessage: 'API key required for remote text-to-speech',
+    };
+  }
+  if (!params.apiUrl.trim()) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: text,
+      durationSec: voiceDurationFromText(text),
+      errorMessage: 'Voice API URL is required for remote text-to-speech',
     };
   }
 
@@ -306,6 +406,8 @@ async function synthesizeSpeechAudioUnsafe(params: {
     apiKey: params.apiKey,
     text,
     voiceProfileId: params.voiceProfileId,
+    model: params.ttsModel,
+    signal: params.signal,
   });
 }
 
@@ -314,6 +416,8 @@ export async function synthesizeSpeechAudio(params: {
   apiUrl: string;
   apiKey: string;
   voiceProfileId?: string;
+  ttsModel?: string;
+  signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
   try {
     return await synthesizeSpeechAudioUnsafe(params);

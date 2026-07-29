@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 
-export type NanaMediaKind = 'images' | 'audio' | 'avatars';
+export type NanaMediaKind = 'images' | 'audio' | 'avatars' | 'stickers';
 
 const NANA_MEDIA_ROOT = 'nana-media';
 const AVATAR_STAGING_ROOT = 'nana-avatar-staging';

@@ -257,6 +257,57 @@ async function runViewport(browser, viewport) {
     await page.waitForTimeout(2500);
     if (!glassOnly) await captureStep(page, result, 'home');
 
+    if (!glassOnly && await clickText(page, result, 'Settings')) {
+      await captureNeumorphicStep(
+        page,
+        result,
+        'settings-voice-service',
+        'settings-voice-service',
+      );
+      if (await clickTestId(page, result, 'separate-voice-provider-switch')) {
+        await captureStep(page, result, 'settings-separate-voice-service');
+        for (const label of ['Voice API URL', 'Voice API Key', 'Speech-to-text model', 'Text-to-speech model']) {
+          const field = page.getByText(label, { exact: true });
+          if (await field.count() !== 1 || !await field.isVisible()) {
+            failStep(result, `settings-separate-voice-service: "${label}" is missing`);
+          }
+        }
+        await clickTestId(page, result, 'separate-voice-provider-switch');
+      }
+      await clickRole(page, result, 'button', 'Return to Nana home');
+    }
+
+    if (!glassOnly && await clickText(page, result, 'Characters')) {
+      if (await clickTestId(page, result, 'character-row-luna-id')) {
+        const assertReplyPreferencesVisible = async (step) => {
+          for (const label of ['Follow the message', 'Text only', 'Prefer voice']) {
+            const option = page.getByText(label, { exact: true });
+            if (await option.count() !== 1 || !await option.isVisible()) {
+              failStep(result, `${step}: reply preference "${label}" disappeared`);
+            }
+          }
+        };
+
+        await assertReplyPreferencesVisible('character-editor');
+        if (await clickTestId(page, result, 'character-voice-reply-toggle')) {
+          await assertReplyPreferencesVisible('character-editor-voice-enabled');
+          const testVoiceButton = page.getByTestId('character-test-voice');
+          if (await testVoiceButton.count() !== 1 || !await testVoiceButton.isVisible()) {
+            failStep(result, 'character-editor-voice-enabled: voice preview button is missing');
+          } else {
+            await testVoiceButton.scrollIntoViewIfNeeded();
+            await page.waitForTimeout(180);
+          }
+          await captureStep(page, result, 'character-editor-voice-enabled');
+        }
+        if (await clickTestId(page, result, 'character-video-persona-toggle')) {
+          await assertReplyPreferencesVisible('character-editor-video-enabled');
+          await captureStep(page, result, 'character-editor-video-enabled');
+        }
+      }
+      await clickRole(page, result, 'button', 'Return to Nana home');
+    }
+
     if (await clickText(page, result, 'WeChat')) {
       if (!glassOnly) await captureStep(page, result, 'wechat');
       if (glassOnly) await captureStep(page, result, 'glass-chats-overview');
@@ -273,10 +324,28 @@ async function runViewport(browser, viewport) {
         'discover-neumorphic-sample',
         'discover-neumorphic-group',
       );
+      if (await clickRole(page, result, 'button', 'Moments')) {
+        await captureStep(page, result, 'moments');
+        const duplicateMomentAddButtons = await page.getByRole('button', { name: /Post moment|Add moment/i }).count();
+        if (duplicateMomentAddButtons > 1) {
+          failStep(result, `moments: duplicate publish controls found (${duplicateMomentAddButtons})`);
+        }
+        await clickRole(page, result, 'button', 'Go back');
+      }
     }
 
-    if (glassOnly && await clickRole(page, result, 'tab', 'Me')) {
-      await captureStep(page, result, 'glass-me-overview');
+    if (await clickRole(page, result, 'tab', 'Me')) {
+      await captureStep(page, result, glassOnly ? 'glass-me-overview' : 'me-overview');
+      if (await clickRole(page, result, 'button', 'Stickers')) {
+        await captureStep(page, result, 'sticker-manager');
+        for (const expected of ['Global stickers', 'Relationship stickers', 'Add']) {
+          const target = page.getByRole(expected === 'Add' ? 'button' : 'tab', { name: expected });
+          if (await target.count() < 1 || !await target.first().isVisible()) {
+            failStep(result, `sticker-manager: "${expected}" control is missing`);
+          }
+        }
+        await clickRole(page, result, 'button', 'Go back');
+      }
     }
 
     await clickRole(page, result, 'tab', 'Chats');

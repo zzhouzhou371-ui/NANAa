@@ -34,16 +34,16 @@ baked interaction layers.
   original sky wallpapers, and durable photo-library selection. Android picker
   recovery preserves the theme intent and all choices fall back safely to the
   system sky when an image cannot be loaded.
-- The current home icons remain the default. A bundled nine-icon Nana
-  neumorphic pack can be selected independently and unknown or migrated styles
-  fall back to the system icon pack.
+- The Kuromi neumorphic icon pack is now the sole home icon language. The
+  retired Nana icon-pack option is no longer exposed or bundled by the home
+  grid, and persisted legacy selections migrate forward automatically.
 - The Android UI now shares one lavender/pink-gold neumorphic material system
   for raised rows, compact actions, and inset inputs across Chats, Settings,
   Wallet, World Book, Characters, and Theme.
-- Theme now switches the phone chrome independently between the original
-  crystal material and one shared soft-neumorphic material. The selected
-  material applies together to the dynamic island, home weather widget, and
-  bottom dock, and persists through the version-4 store migration.
+- The shared Kuromi soft-neumorphic phone chrome is now the sole system
+  material across the dynamic island, home weather widget, and bottom dock.
+  The original crystal option is no longer exposed, and version-10 persisted
+  state normalization moves existing installs to the supported material.
 - The old home character portrait widget is replaced by a phone-like raised
   time/date widget beside a separate frameless weather control. It starts safely with time-aware simulated weather,
   explains foreground approximate-location use before asking, uses bounded
@@ -116,6 +116,50 @@ baked interaction layers.
   data removes the media directory as well as local state.
 - Android image-picker activity recovery remembers and restores the target chat.
 
+### Online Social And Multimodal Loop
+
+- Moments now uses the shared sky and Kuromi neumorphic material without the
+  redundant in-feed add button. User posts persist locally, support durable
+  local photos, likes, comments, and replies, and no longer create relationship
+  memory merely because every friend could see a post.
+- Each character has an independent autonomous-Moments policy (`off`,
+  `occasional`, or `normal`). Foreground scheduling has per-character and
+  global cooldowns, consumes a real relationship event at most once, and
+  generates from the character persona with a localized fallback when no model
+  is configured.
+- Stickers are durable first-class chat messages. A shared global library is
+  available from WeChat Me; each relationship also has a private library from
+  the character profile. Multi-select photo-library import supports animated
+  GIF/APNG/WebP assets, while editable names and semantic tags let both the user
+  and the character select stickers by meaning.
+- User photo messages keep their original image bubble and can now continue
+  through a bounded vision-capability request before the text model replies.
+  Failed or unavailable vision falls back safely without blocking the chat;
+  unanalysed or sensitive images are not promoted automatically into memory.
+- Character profiles can hold a user-approved local image library. Autonomous
+  image sharing is explicit opt-in and enforces character isolation, intent/tag
+  matching, a six-hour cooldown, and a two-image daily cap.
+- Text, vision, speech-to-text, and text-to-speech now have explicit capability
+  boundaries and diagnostics. Settings can either reuse the chat provider or
+  securely configure a separate OpenAI-compatible voice endpoint, which allows
+  Gemini chat to coexist with remote character speech. STT and TTS models are
+  independently selectable and time/response-size bounded.
+- Character editing exposes real remote voice presets, accepts compatible
+  custom voice IDs, and provides an immediate preview. Character profiles also
+  expose a one-tap preview. Unsupported official-provider voice IDs fail
+  explicitly and use installed device speech instead of silently changing to a
+  different remote voice.
+- Voice bubbles share one native audio player across the recycled chat list;
+  bubbles without a retained remote audio file remain playable through the
+  installed device voice. Starting or ending a call stops message audio,
+  releases synthesis playback, and aborts in-flight STT/model/TTS work. Muting
+  or backgrounding performs the same cancellation, while call and preview TTS
+  files are deleted immediately after playback instead of accumulating in the
+  relationship-media directory.
+- Voice reply permission now gates chat voice output. Calls remain the current
+  turn-based capture -> transcription -> model -> speech loop, not full-duplex
+  realtime audio or WebRTC.
+
 ### Reliability And Data Safety
 
 - Chat AI work is isolated by immutable chat ID and request token. Stale replies
@@ -164,6 +208,14 @@ baked interaction layers.
   the newest unused real relationship event. Without a key or after a provider
   failure, the local adapter uses persona-sensitive localized copy. Event trace
   IDs are consumed once so outreach cannot cycle backward through old events.
+- Relationship notifications are now an explicit global opt-in in Settings.
+  The native runtime schedules only the next eligible character reminder,
+  preserves the existing global cooldown and resting-window rules, and cancels
+  stale Nana reminders without touching unrelated notifications. Tapping a
+  reminder opens the corresponding in-phone chat. Closed-app reminders are
+  local only: they never fetch a push token or call the configured model API.
+  Native and web implementations are split so browser smoke tests do not load
+  the mobile notification module.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
@@ -177,9 +229,20 @@ baked interaction layers.
   retain an isolated compatibility repository, and portable export/import
   still carries the complete conversation history with database-aware rollback.
 - The chat surface now uses FlashList recycling and starts from the newest
-  messages, so off-screen historical bubbles are not all mounted at once.
-  Existing bubble, payment, voice, retry, selection, and memory behavior remains
-  unchanged.
+  messages without animating through older history, so off-screen historical
+  bubbles are not all mounted at once.
+- Payment reactions now include persona, recent chat, and relationship context,
+  and the character may accept or decline a transfer or red packet. A longer
+  bounded provider window reduces false fallbacks; timeout or malformed output
+  degrades to a short persona-sensitive accept/decline reply instead of an
+  official system template. Settlement remains in the durable payment path.
+- Opening a simulated app reuses the already-mounted sky instead of mounting a
+  second full-screen scene. Home widgets and their looping weather animations
+  unmount while an app is active, and the old full-screen opacity/translate
+  transition no longer exposes the dark canvas between surfaces.
+- Character reply-preference pills now have explicit intrinsic height and a
+  non-flexing text layer. Enabling voice or video fields cannot collapse their
+  labels during Android layout recalculation.
 
 ## Verification
 
@@ -190,7 +253,9 @@ baked interaction layers.
   `test:storage`, `test:chat-storage`, `test:trace`, `test:memory-context`,
   `test:memory-correction`, `test:chat`, `test:chat-rhythm`,
   `test:message-delivery`, `test:conversation-continuity`, and
-  `test:proactive-chat`.
+  `test:proactive-chat`, `test:proactive-notifications`, `test:moments`,
+  `test:stickers`, `test:provider-capabilities`, `test:image-ai`,
+  `test:character-media`, `test:voice-provider`, plus `test:theme`.
 - UI smoke: four viewports (390x844, 412x915, 360x800, 320x568), seven core
   screens per viewport, screenshots plus console/page-error and overflow checks.
   The pre-UI-polish regression baseline generated on 2026-07-16 is in
@@ -215,6 +280,28 @@ baked interaction layers.
   subsequent bidirectional-burst pass also completed the full 360x800 chat,
   voice, payment, avatar, and call UI smoke path at
   `screenshots/smoke-chat-bursts/report.json`.
+- The 2026-07-29 physical-device follow-up completed TypeScript, ESLint, text,
+  payment, storage, chat-storage, theme, and localization checks. The Pixel 7
+  UI path now also toggles both character media settings and asserts that all
+  three reply-preference labels remain visible before continuing through chat,
+  payment, avatar, and voice/video call coverage.
+- The 2026-07-29 online-social pass completed TypeScript, ESLint, Moments,
+  stickers, provider-capability, image-understanding, character-media, payment,
+  media, storage, long-chat, continuity, proactive-chat, trace, and localization
+  checks. The complete four-viewport UI path passes; a focused 390x844 path
+  additionally opens Moments and the global sticker manager at
+  `screenshots/smoke-social-final/report.json`.
+- The 2026-07-29 voice-provider pass completed provider, media, call route,
+  call activity, voice gesture, storage, long-chat, continuity, payment,
+  Moments, sticker, vision, character-media, localization, TypeScript, and
+  ESLint checks. A focused 390x844 UI path covers the separate voice service,
+  character voice selection, and chat recording states at
+  `screenshots/smoke-voice-provider/report.json`.
+- The final pre-offline online integration pass completed every repository
+  contract plus TypeScript, ESLint, localization, and Android export. Its full
+  four-viewport UI path covers Settings voice service, character voice editing,
+  Moments, sticker management, chat recording, payment states, profiles, and
+  voice/video calls at `screenshots/smoke-online-final/report.json`.
 - The subsequent proactive-chat pass added a dedicated scheduler contract for
   initialization, migration, interaction and send cooldowns, global
   anti-burst limiting, eligibility, localized copy, lifecycle checks, unread
@@ -225,6 +312,11 @@ baked interaction layers.
   360x800 path at `screenshots/smoke-proactive-profile/report.json`; the online
   profile switch remains readable without displacing the existing reply and
   video capability rows.
+- The closed-app relationship-notification foundation passes its dedicated
+  permission, scheduling, cost-policy, deep-link, persistence, and web-boundary
+  contract. Expo config resolves `expo-notifications` 55.0.25, all four UI
+  smoke viewports pass, and a regenerated local Android debug APK contains
+  `POST_NOTIFICATIONS`, boot recovery, and the Expo notification services.
 - The outgoing-delivery pass adds deterministic transport/read planning,
   persisted lifecycle normalization, duplicate-safe turn retry, foreground
   recovery, and a dedicated `test:message-delivery` contract. The complete
@@ -275,25 +367,35 @@ behavior. The Android development client must still be installed on physical
 hardware, and an iOS development client must still be built and installed, to
 verify first allow, deny, permanently deny, background return, process restart,
 SecureStore, microphone recording, camera preview, picker recovery, and durable
-media playback.
+media playback. Animated sticker playback, multi-select album import, remote
+vision compatibility, autonomous character-photo limits, and persona payment
+accept/decline also require the next physical-device/API pass. Voice validation
+must additionally cover microphone allow/deny, the selected remote STT/TTS
+provider, device-speech fallback, Bluetooth/wired route changes, ending a call
+while recognition or synthesis is active, and a sustained voice-chat heat run.
 
 Sounds and the standalone Photos app remain intentionally disabled until they
 have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Add physical-device system notifications for due proactive events while the
-   app is closed, preserving the current durable cooldown and eligibility rules.
-2. Add an explicit user-facing network/cost policy for model-generated
-   proactive messages before enabling closed-app background generation.
-3. Run the current SQLite migration, high-volume chat, model-backed rhythm, and
+1. Prepare the next intentional Android test build only after this online-social
+   slice is committed, then verify global/relationship GIF stickers, album
+   permissions, character photo sharing, user-photo understanding, and several
+   persona-dependent transfer/red-packet accept and decline cases.
+2. In the same long physical-device session, verify autonomous Moments timing,
+   likes/comments, sustained chat continuity, notification allow/deny and tap
+   routing, battery temperature, and app-to-chat transition smoothness.
+3. Keep closed-app reminders local-only until a separate server-backed
+   generation design has explicit cost, privacy, retry, and deduplication rules.
+4. Run the current SQLite migration, high-volume chat, model-backed rhythm, and
    persona/event-driven proactive checks together on a physical Android device
    when the next test APK is intentionally prepared.
-4. Continue the online memory vertical slice with canonical fact extraction
+5. Continue the online memory vertical slice with canonical fact extraction
    and deterministic recall scoring after sustained real-model conversations
    provide test data.
-5. Establish Apple signing/device access and run the same physical-device
+6. Establish Apple signing/device access and run the same physical-device
    matrix on iOS.
-6. Build offline meeting later as a standalone simulated-phone app with its own
+7. Build offline meeting later as a standalone simulated-phone app with its own
    sessions and checkpoints, writing only completed relationship outcomes into
    `RelationshipTrace`.

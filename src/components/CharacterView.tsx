@@ -13,6 +13,7 @@ import {
   type CharacterAvatarDraftSnapshot,
 } from '../services/nativeImagePickerRuntime';
 import { normalizeAvatarValue } from '../services/avatarValueRuntime';
+import { REMOTE_VOICE_PRESETS } from '../services/voiceProviderRuntime';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 
 const isImageAvatar = (avatar: string) => /^(https?:|data:|file:|content:|blob:)/.test(avatar.trim());
@@ -34,11 +35,23 @@ const legacyFromPreference = (preference?: ChatReplyPreference): ReplyMode => {
   return 'auto';
 };
 
-function MediaToggle({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (next: boolean) => void }) {
+function MediaToggle({
+  label,
+  value,
+  onValueChange,
+  testID,
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  testID?: string;
+}) {
   return (
     <View style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 5 }}>
       <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 13, fontWeight: '800', flex: 1, paddingRight: 10 }}>{label}</Text>
       <Switch
+        testID={testID}
+        accessibilityLabel={label}
         value={value}
         onValueChange={onValueChange}
         trackColor={{ false: neumorphicPalette.lavender, true: neumorphicPalette.pinkGold }}
@@ -285,6 +298,7 @@ export function CharacterView() {
         {!characterEditorOpen && characters.map(c => (
           <AnimatedPressable
             key={c.id}
+            testID={`character-row-${c.id}`}
             onPress={() => {
               setShowAvatarTextInput(false);
               set({
@@ -448,37 +462,118 @@ export function CharacterView() {
                 {t.mediaAbilitiesDesc}
               </Text>
               <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800', marginBottom: 8 }}>{t.replyPreference}</Text>
-              <View className="flex-row gap-2 mb-3">
+              <View testID="character-reply-preference-row" className="flex-row gap-2 mb-3">
                 {replyPreferences.map(preference => (
-                  <AnimatedPressable
-                    key={preference}
-                    onPress={() => set({ newCharPreferredReplyMode: legacyFromPreference(preference) })}
-                    className="flex-1 rounded-full items-center py-2"
-                    style={{
-                      backgroundColor: selectedReplyPreference === preference ? neumorphicPalette.pinkGold : neumorphicPalette.lavender,
-                      boxShadow: selectedReplyPreference === preference
-                        ? '-3px -3px 6px rgba(255,248,255,0.42), 3px 4px 6px rgba(54,43,67,0.20)'
-                        : 'inset 2px 2px 5px rgba(54,43,67,0.24), inset -2px -2px 5px rgba(255,248,255,0.30)',
-                    }}
-                  >
-                    <Text numberOfLines={1} style={{ color: neumorphicPalette.onLightPrimary, fontSize: 10.5, fontWeight: '800' }}>{replyPreferenceLabel(preference)}</Text>
-                  </AnimatedPressable>
+                  <View key={preference} style={{ flex: 1, minWidth: 0 }}>
+                    <AnimatedPressable
+                      onPress={() => set({ newCharPreferredReplyMode: legacyFromPreference(preference) })}
+                      style={{
+                        width: '100%',
+                        minHeight: 36,
+                        borderRadius: 999,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingHorizontal: 5,
+                        paddingVertical: 8,
+                        backgroundColor: selectedReplyPreference === preference ? neumorphicPalette.pinkGold : neumorphicPalette.lavender,
+                        boxShadow: selectedReplyPreference === preference
+                          ? '-3px -3px 6px rgba(255,248,255,0.42), 3px 4px 6px rgba(54,43,67,0.20)'
+                          : 'inset 2px 2px 5px rgba(54,43,67,0.24), inset -2px -2px 5px rgba(255,248,255,0.30)',
+                      }}
+                    >
+                      <Text
+                        numberOfLines={1}
+                        style={{
+                          color: neumorphicPalette.onLightPrimary,
+                          fontSize: 10.5,
+                          lineHeight: 14,
+                          fontWeight: '800',
+                        }}
+                      >
+                        {replyPreferenceLabel(preference)}
+                      </Text>
+                    </AnimatedPressable>
+                  </View>
                 ))}
               </View>
               <MediaToggle
+                testID="character-voice-reply-toggle"
                 label={t.voiceProfile || 'Voice profile'}
                 value={newCharSupportsVoiceReply}
                 onValueChange={(next) => set({ newCharSupportsVoiceReply: next })}
               />
               {newCharSupportsVoiceReply && (
-                <CharacterField
-                  label={t.voiceProfileId || 'Voice Profile ID'}
-                  value={newCharVoiceProfileId}
-                  onChange={(v) => set({ newCharVoiceProfileId: v })}
-                  placeholder="voice_luna_01"
-                />
+                <View style={{ marginTop: 2, marginBottom: 14 }}>
+                  <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800', marginBottom: 9, paddingHorizontal: 4 }}>
+                    {t.voicePresets || 'Quick voice choices'}
+                  </Text>
+                  <View
+                    accessibilityRole="radiogroup"
+                    style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}
+                  >
+                    {REMOTE_VOICE_PRESETS.map(voiceId => {
+                      const selected = (newCharVoiceProfileId.trim() || 'alloy') === voiceId;
+                      return (
+                        <AnimatedPressable
+                          key={voiceId}
+                          accessibilityRole="radio"
+                          accessibilityLabel={voiceId}
+                          accessibilityState={{ selected }}
+                          onPress={() => set({ newCharVoiceProfileId: voiceId })}
+                          style={{ minWidth: 74, minHeight: 40, borderRadius: 999 }}
+                        >
+                          <NeumorphicSurface
+                            pointerEvents="none"
+                            depth={selected ? 'inset' : 'raisedSmall'}
+                            tone={selected ? 'pinkGold' : 'lavender'}
+                            radius={999}
+                            style={{ position: 'absolute', inset: 0 }}
+                            contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
+                          >
+                            <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800' }}>
+                              {voiceId}
+                            </Text>
+                          </NeumorphicSurface>
+                        </AnimatedPressable>
+                      );
+                    })}
+                  </View>
+                  <CharacterField
+                    label={t.voiceProfileId || 'Voice Profile ID'}
+                    value={newCharVoiceProfileId}
+                    onChange={(v) => set({ newCharVoiceProfileId: v })}
+                    placeholder="alloy / custom voice ID"
+                  />
+                  <AnimatedPressable
+                    testID="character-test-voice"
+                    accessibilityRole="button"
+                    accessibilityLabel={t.testVoice}
+                    onPress={() => {
+                      void useNanaStore.getState().previewCharacterVoice({
+                        characterId: editingCharId || undefined,
+                        characterName: newCharName.trim() || undefined,
+                        voiceProfileId: newCharVoiceProfileId.trim() || 'alloy',
+                      });
+                    }}
+                    style={{ minHeight: 46, borderRadius: 999 }}
+                  >
+                    <NeumorphicSurface
+                      pointerEvents="none"
+                      depth="raisedSmall"
+                      tone="champagnePink"
+                      radius={999}
+                      style={{ position: 'absolute', inset: 0 }}
+                      contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 }}
+                    >
+                      <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 13, fontWeight: '800' }}>
+                        {t.testVoice}
+                      </Text>
+                    </NeumorphicSurface>
+                  </AnimatedPressable>
+                </View>
               )}
               <MediaToggle
+                testID="character-video-persona-toggle"
                 label={t.videoPersona || 'Video persona'}
                 value={newCharSupportsVideoPersona}
                 onValueChange={(next) => set({ newCharSupportsVideoPersona: next })}

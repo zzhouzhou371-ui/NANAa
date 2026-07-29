@@ -27,6 +27,13 @@ import {
   hydrateDurableChatHistory,
   startDurableChatHistoryPersistence,
 } from '../services/chatHistoryPersistence';
+import {
+  configureProactiveNotificationRuntime,
+  consumeLastProactiveNotificationResponse,
+  dismissPresentedProactiveNotifications,
+  observeProactiveNotificationResponses,
+  queueProactiveSystemNotificationSync,
+} from '../services/proactiveNotificationRuntime';
 import '../global.css';
 
 if (Platform.OS === 'web') {
@@ -67,7 +74,12 @@ export default function RootLayout() {
       );
       useNanaStore.setState({ chatHistory: durableChatHistory });
       startDurableChatHistoryPersistence();
-      useNanaStore.setState({ apiKey: secret.apiKey, tempApiKey: secret.apiKey });
+      useNanaStore.setState({
+        apiKey: secret.apiKey,
+        tempApiKey: secret.apiKey,
+        voiceApiKey: secret.voiceApiKey,
+        tempVoiceApiKey: secret.voiceApiKey,
+      });
       const recoveredSelection = await recoverPendingImagePickerSelection();
       if (recoveredSelection) {
         const { intent, result } = recoveredSelection;
@@ -152,6 +164,7 @@ export default function RootLayout() {
       useNanaStore.getState().reconcileChatDeliveryStates();
       void useNanaStore.getState().reconcilePayments();
       void useNanaStore.getState().runProactiveChatHeartbeat();
+      void useNanaStore.getState().runProactiveMomentsHeartbeat();
       setStorageReady(true);
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'Nana could not load local data safely.');
@@ -176,7 +189,9 @@ export default function RootLayout() {
       if (storageReady && previousState !== 'active' && nextState === 'active') {
         useNanaStore.getState().reconcileChatDeliveryStates();
         void useNanaStore.getState().reconcilePayments();
-        void useNanaStore.getState().runProactiveChatHeartbeat();
+        void useNanaStore.getState().runProactiveChatHeartbeat()
+          .finally(() => dismissPresentedProactiveNotifications());
+        void useNanaStore.getState().runProactiveMomentsHeartbeat();
       }
     });
     return () => subscription.remove();
@@ -184,9 +199,82 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (!storageReady) return;
+    let lastSignature = '';
+    const syncNotifications = () => {
+      const state = useNanaStore.getState();
+      const signature = JSON.stringify({
+        enabled: state.proactiveNotificationsEnabled,
+        language: state.themeConfig.language,
+        friends: state.friends,
+        blockedUsers: state.blockedUsers,
+        characters: state.characters.map(character => ({
+          id: character.id,
+          name: character.name,
+          proactiveMessagingEnabled: character.proactiveMessagingEnabled !== false,
+        })),
+        schedules: state.proactiveChatSchedules,
+      });
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+      void queueProactiveSystemNotificationSync({
+        enabled: state.proactiveNotificationsEnabled,
+        language: state.themeConfig.language,
+        characters: state.characters,
+        friends: state.friends,
+        blockedUsers: state.blockedUsers,
+        schedules: state.proactiveChatSchedules,
+      }).catch(error => {
+        console.warn('Could not synchronize proactive relationship notification.', error);
+      });
+    };
+
+    void configureProactiveNotificationRuntime()
+      .then(() => {
+        syncNotifications();
+        return dismissPresentedProactiveNotifications();
+      })
+      .catch(error => {
+        console.warn('Could not configure relationship notifications.', error);
+      });
+    const unsubscribe = useNanaStore.subscribe(syncNotifications);
+    return unsubscribe;
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    const openCharacterChat = (characterId: string) => {
+      const state = useNanaStore.getState();
+      if (
+        !state.characters.some(character => character.id === characterId)
+        || !state.friends.includes(characterId)
+        || state.blockedUsers.includes(characterId)
+      ) return;
+      useNanaStore.setState({
+        activeApp: 'wechat',
+        weChatTab: 'chats',
+        weChatPage: 'chat',
+        activeChatId: characterId,
+        activeProfileId: null,
+        chatPanel: 'none',
+        unreadCounts: {
+          ...state.unreadCounts,
+          [characterId]: 0,
+        },
+      });
+      void useNanaStore.getState().runProactiveChatHeartbeat();
+    };
+
+    const pendingCharacterId = consumeLastProactiveNotificationResponse();
+    if (pendingCharacterId) openCharacterChat(pendingCharacterId);
+    return observeProactiveNotificationResponses(openCharacterChat);
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
     const timer = setInterval(() => {
       if (appStateRef.current === 'active') {
         void useNanaStore.getState().runProactiveChatHeartbeat();
+        void useNanaStore.getState().runProactiveMomentsHeartbeat();
       }
     }, 60_000);
     return () => clearInterval(timer);

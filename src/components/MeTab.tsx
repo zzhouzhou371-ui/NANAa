@@ -35,7 +35,11 @@ export function MeTab() {
       color: meColors.stickers,
       label: t.stickers,
       subtitle: t.stickerSubtitle,
-      onPress: () => {},
+      onPress: () => set({
+        weChatPage: 'stickers',
+        stickerManagerCharacterId: null,
+        activeProfileId: null,
+      }),
     },
     {
       Icon: Heart,

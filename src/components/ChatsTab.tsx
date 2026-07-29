@@ -28,6 +28,7 @@ function messagePreview(message: Message | undefined, t: Record<string, string>,
     return `${t.voiceMessage}${duration}`;
   }
   if (message.type === 'image') return t.sharedPhoto;
+  if (message.type === 'sticker') return message.stickerName || t.stickers;
   if (message.type === 'payment') return payment?.note || (payment?.kind === 'transfer' ? t.transfer : t.redPacket);
   if (message.type === 'transfer' || message.type === 'transfer_received') return message.note || t.transfer;
   if (message.type === 'redpacket' || message.type === 'redpacket_received') return message.note || t.redPacket;

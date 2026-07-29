@@ -48,16 +48,6 @@ const expectThrows = (fn, message) => {
     // Expected.
   }
 };
-const expectRejects = async (promise, expectedText, message) => {
-  try {
-    await promise;
-    errors.push(message);
-  } catch (error) {
-    if (!String(error?.message || error).includes(expectedText)) {
-      errors.push(`${message} (unexpected error: ${String(error?.message || error)})`);
-    }
-  }
-};
 const zhRuntimeCopy = runtimeCopy.runtimeCopyFor('zh-CN');
 const zhCallRecord = runtimeCopy.runtimeCallRecord(zhRuntimeCopy, 'video', 'completed', '01:08');
 expect(zhCallRecord.includes('视频通话') && zhCallRecord.includes('时长 01:08'), 'Chinese runtime copy must localize call records and duration');
@@ -176,6 +166,11 @@ const ai = loadTypeScriptModule('src/services/ai.ts', {
     responseErrorMessage: () => 'remote error',
   },
   './runtimeCopy': runtimeCopy,
+  './conversationContinuityRuntime': {
+    CONTINUITY_ENVELOPE_INSTRUCTION: '',
+    formatConversationContinuityContext: () => '',
+    parseConversationContinuityEnvelope: text => ({ displayText: text }),
+  },
 });
 const localReaction = await ai.generatePaymentReaction({
   kind: 'transfer',
@@ -188,6 +183,17 @@ const localReaction = await ai.generatePaymentReaction({
 });
 expect(localReaction.source === 'local' && localReaction.decision === 'accept', 'no-key fallback must make a characterized local accept decision');
 expect(localReaction.replyText.toLowerCase().includes('kindness'), 'local fallback must use character description rather than a generic receipt');
+const localDeclineReaction = await ai.generatePaymentReaction({
+  kind: 'transfer',
+  amountMinor: 100000,
+  userName: 'User',
+  character: { id: 'kai-id', name: 'Kai', avatar: 'K', desc: 'proud, independent and reserved' },
+  apiUrl: '',
+  apiKey: '',
+  selectedModel: '',
+});
+expect(localDeclineReaction.source === 'local' && localDeclineReaction.decision === 'decline', 'no-key fallback must allow an in-character decline');
+expect(/won't take|keep it/i.test(localDeclineReaction.replyText), 'local decline must include an in-character explanation');
 const localizedReaction = await ai.generatePaymentReaction({
   kind: 'redPacket',
   amountMinor: 888,
@@ -201,7 +207,7 @@ const localizedReaction = await ai.generatePaymentReaction({
 expect(localizedReaction.replyText.includes('红包'), 'Chinese no-key payment reactions must use localized object language');
 expect(!/Thank|accept|kindness/i.test(localizedReaction.replyText), 'Chinese no-key payment reactions must not leak the English fallback copy');
 
-await expectRejects(ai.generatePaymentReaction({
+const malformedRemoteFallback = await ai.generatePaymentReaction({
   kind: 'transfer',
   amountMinor: 1888,
   userName: 'User',
@@ -209,7 +215,11 @@ await expectRejects(ai.generatePaymentReaction({
   apiUrl: 'https://example.com',
   apiKey: 'test-key',
   selectedModel: 'test-model',
-}), 'unsupported decision', 'remote payment reactions must reject decisions outside accept/decline');
+});
+expect(
+  malformedRemoteFallback.source === 'local' && malformedRemoteFallback.decision === 'accept',
+  'malformed remote payment reactions must fall back locally instead of leaving the character silent',
+);
 
 remoteContent = '{"decision":"decline","replyText":"I cannot accept this."}';
 const remoteReaction = await ai.generatePaymentReaction({

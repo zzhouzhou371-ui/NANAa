@@ -3,6 +3,7 @@ import { AppState, Keyboard, Platform, Pressable, Text, TextInput, View, useWind
 import { Keyboard as KeyboardIcon, Mic, Plus, Send, Smile } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { transcribeAudioCapture } from '../services/audioAiRuntime';
+import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { useNativeVoiceCapture } from '../services/nativeAudioRuntime';
 import type { MediaCaptureResult } from '../services/mediaRuntime';
 import { useNanaStore } from '../stores/nanaStore';
@@ -56,6 +57,8 @@ export function ChatInputBar() {
   const chatPanel = useNanaStore(state => state.chatPanel);
   const activeChatId = useNanaStore(state => state.activeChatId);
   const blockedUsers = useNanaStore(state => state.blockedUsers);
+  const stickers = useNanaStore(state => state.stickers);
+  const sendSticker = useNanaStore(state => state.sendSticker);
   const callOverlayVisible = useNanaStore(state => state.callOverlay.show);
   const set = useNanaStore.setState;
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
@@ -186,11 +189,22 @@ export function ChatInputBar() {
     if (intent === 'transcribe') {
       setVoicePhase('converting');
       const state = useNanaStore.getState();
+      const voiceProvider = resolveVoiceProvider({
+        voiceProviderEnabled: state.voiceProviderEnabled,
+        voiceApiUrl: state.voiceApiUrl,
+        voiceApiKey: state.voiceApiKey,
+        voiceSttModel: state.voiceSttModel,
+        voiceTtsModel: state.voiceTtsModel,
+        chatApiUrl: state.apiUrl,
+        chatApiKey: state.apiKey,
+        chatModel: state.selectedModel,
+      });
       const transcriptCapture = await transcribeAudioCapture({
         capture,
-        apiUrl: state.apiUrl,
-        apiKey: state.apiKey,
-        selectedModel: state.selectedModel,
+        apiUrl: voiceProvider.stt.apiUrl,
+        apiKey: voiceProvider.stt.apiKey,
+        selectedModel: voiceProvider.stt.model,
+        sttModel: voiceProvider.stt.model,
         language: state.speechLanguage || 'zh-CN',
       });
       discardNativeVoiceCapture(capture);
@@ -787,7 +801,22 @@ export function ChatInputBar() {
           contentStyle={{ overflow: 'hidden' }}
         >
           {chatPanel === 'emoji'
-            ? <EmojiPanel onSelect={emoji => set({ chatInput: chatInput + emoji })} />
+            ? (
+                <EmojiPanel
+                  onSelect={emoji => set({ chatInput: chatInput + emoji })}
+                  stickers={stickers}
+                  characterId={activeChatId || undefined}
+                  onSelectSticker={sticker => {
+                    set({ chatPanel: 'none' });
+                    void sendSticker(sticker.id);
+                  }}
+                  onManageStickers={() => set({
+                    weChatPage: 'stickers',
+                    stickerManagerCharacterId: activeChatId,
+                    chatPanel: 'none',
+                  })}
+                />
+              )
             : <PlusMenuPanel />}
         </NeumorphicSurface>
       ) : null}
