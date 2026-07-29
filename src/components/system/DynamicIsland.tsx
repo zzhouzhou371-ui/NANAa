@@ -426,14 +426,14 @@ export function DynamicIsland({ compact: compactOverride }: DynamicIslandProps =
             <NotificationIcon notification={notification} neumorphic={neumorphic} />
             <View style={{ flex: 1, minWidth: 0, height: 44, justifyContent: 'center' }}>
               <View style={{ height: 31, position: 'relative', overflow: 'hidden' }}>
-                <AnimatePresence>
+                <AnimatePresence initial={false} exitBeforeEnter={false}>
                   <MotiView
                     key={notificationCopyKey}
                     from={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    transition={{ type: 'timing', duration: reducedMotion ? 80 : 150 }}
-                    exitTransition={{ type: 'timing', duration: reducedMotion ? 70 : 120 }}
+                    transition={{ type: 'timing', duration: reducedMotion ? 70 : 145 }}
+                    exitTransition={{ type: 'timing', duration: reducedMotion ? 60 : 110 }}
                     style={StyleSheet.absoluteFillObject}
                   >
                     <Text numberOfLines={1} style={{ color: titleColor, fontSize: 14, lineHeight: 16, fontWeight: '800' }}>

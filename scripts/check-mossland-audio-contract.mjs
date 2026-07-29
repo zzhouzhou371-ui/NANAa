@@ -130,9 +130,12 @@ expect(calls.length === 1, 'Mossland STT must make exactly one request');
 expect(calls[0]?.url === 'https://api.mosi.cn/v1/audio/transcriptions', 'Mossland STT must call the documented endpoint');
 const sttEntries = calls[0]?.init?.body?.entries || [];
 expect(sttEntries.map(entry => entry[0]).join(',') === 'file,model,response_format', 'Mossland STT must send only documented multipart fields');
+expect(sttEntries.find(entry => entry[0] === 'file')?.[1] instanceof MockFile, 'Mossland STT must append an expo-file-system File directly');
+expect(sttEntries.find(entry => entry[0] === 'file')?.[2] === undefined, 'Mossland STT must let the Expo File provide its own multipart filename');
 expect(sttEntries.find(entry => entry[0] === 'model')?.[1] === 'moss-transcribe', 'Mossland STT must force moss-transcribe');
 expect(sttEntries.find(entry => entry[0] === 'response_format')?.[1] === 'json', 'Mossland STT must request JSON');
 expect(calls[0]?.init?.headers?.Authorization === 'Bearer secret-key', 'Mossland STT must use bearer auth without exposing the key elsewhere');
+expect(!calls[0]?.init?.headers?.['Content-Type'], 'Mossland STT must let expo/fetch generate the multipart boundary');
 
 calls.length = 0;
 nextResponse = response();
@@ -181,8 +184,34 @@ const failedStt = await runtime.transcribeAudioCapture({
   language: 'zh-CN',
 });
 expect(failedStt.phase === 'failed', 'failed Mossland STT must report failure');
+expect(failedStt.errorStage === 'response', 'failed Mossland HTTP responses must retain the response-stage diagnostic');
 expect(failedStt.localUri === 'file:///documents/retained.m4a', 'failed Mossland STT must retain the local audio URI for retry');
 expect(failedStt.durationSec === 3, 'failed Mossland STT must retain recorded duration');
+
+calls.length = 0;
+nextResponse = response({
+  ok: false,
+  status: 401,
+  json: { error: { message: 'bad credential secret-key at https://api.mosi.cn?api_key=secret-key' } },
+});
+const redactedStt = await runtime.transcribeAudioCapture({
+  capture: {
+    phase: 'ready',
+    mediaKind: 'audio',
+    localUri: 'file:///documents/retained.m4a',
+    durationSec: 3,
+  },
+  apiUrl: 'https://api.mosi.cn',
+  apiKey: 'secret-key',
+  selectedModel: 'moss-transcribe',
+  language: 'zh-CN',
+});
+expect(!redactedStt.errorMessage.includes('secret-key'), 'Mossland diagnostics must never echo the configured API key');
+expect(redactedStt.errorMessage.includes('[REDACTED]'), 'Mossland diagnostics must redact secrets without flattening the provider response');
+
+const networkSource = readFileSync(resolve(root, 'src/services/network.ts'), 'utf8');
+expect(networkSource.includes("import { fetch as expoFetch } from 'expo/fetch';"), 'network requests must use the SDK 55 expo/fetch implementation');
+expect(networkSource.includes('return await expoFetch('), 'the timeout wrapper must execute expo/fetch');
 
 if (errors.length > 0) {
   console.error('Mossland audio contract failed:');

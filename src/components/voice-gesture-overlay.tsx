@@ -11,6 +11,8 @@ import { create } from 'zustand';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { CHAT_BUBBLE_OUTGOING_INK } from './chat-bubble-surface';
+import { neumorphicPalette } from './neumorphic-surface';
+import { useReduceMotionEnabled } from './system/DynamicIsland';
 import { wechatTheme } from './wechatTheme';
 
 export type VoiceGestureVisualPhase =
@@ -100,6 +102,7 @@ export function VoiceGestureOverlay() {
   const weChatPage = useNanaStore(state => state.weChatPage);
   const callVisible = useNanaStore(state => state.callOverlay.show);
   const neumorphic = useNanaStore(state => state.themeConfig.chromeStyle === 'neumorphic-v1');
+  const reducedMotion = useReduceMotionEnabled();
 
   if (!visual.visible || activeApp !== 'wechat' || weChatPage !== 'chat' || callVisible) return null;
 
@@ -184,11 +187,41 @@ export function VoiceGestureOverlay() {
     : transcribeArmed
       ? Math.min(44, bubbleWidth * 0.13)
       : Math.min(70, bubbleWidth * 0.4);
-  const bubbleFill = cancelArmed
-    ? { top: '#E77895', middle: '#B54164', bottom: '#5B2037', topOpacity: 0.55, middleOpacity: 0.68, bottomOpacity: 0.8 }
-    : transcribeArmed
-      ? { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.56, bottomOpacity: 0.73 }
-      : { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.57, bottomOpacity: 0.74 };
+  const bubbleFill = neumorphic
+    ? cancelArmed
+      ? { top: '#E4C0CC', middle: neumorphicPalette.pinkGold, bottom: '#B87790', topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
+      : transcribeArmed
+        ? { top: '#DCE0EE', middle: '#BCC4DD', bottom: '#9CA8C8', topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
+        : { top: '#E6DFEF', middle: neumorphicPalette.mist, bottom: neumorphicPalette.soft, topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
+    : cancelArmed
+      ? { top: '#E77895', middle: '#B54164', bottom: '#5B2037', topOpacity: 0.55, middleOpacity: 0.68, bottomOpacity: 0.8 }
+      : transcribeArmed
+        ? { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.56, bottomOpacity: 0.73 }
+        : { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.57, bottomOpacity: 0.74 };
+  const bubbleInk = neumorphic
+    ? transcribeArmed
+      ? '#303952'
+      : cancelArmed
+        ? '#452735'
+        : neumorphicPalette.onLightPrimary
+    : wechatTheme.ink;
+  const waveformInk = neumorphic
+    ? transcribeArmed
+      ? '#3D496A'
+      : cancelArmed
+        ? '#5B3042'
+        : '#49394F'
+    : 'rgba(48, 20, 38, 0.96)';
+  const bubbleRim = neumorphic
+    ? transcribeArmed
+      ? 'rgba(250,252,255,0.72)'
+      : 'rgba(255,249,252,0.68)'
+    : 'rgba(255,245,248,0.10)';
+  const bubbleDepth = neumorphic
+    ? transcribeArmed
+      ? 'rgba(45,53,78,0.38)'
+      : 'rgba(57,39,62,0.38)'
+    : 'rgba(5,2,7,0.16)';
 
   return (
     <View
@@ -207,11 +240,13 @@ export function VoiceGestureOverlay() {
         // the chat header and composer remain underneath this root-level layer.
         zIndex: 55,
         overflow: 'hidden',
-        backgroundColor: 'rgba(2, 1, 6, 0.72)',
+        backgroundColor: neumorphic ? 'rgba(18, 11, 23, 0.62)' : 'rgba(2, 1, 6, 0.72)',
       }}
     >
       <LinearGradient
-        colors={['rgba(18, 4, 17, 0)', 'rgba(9, 1, 11, 0.36)', 'rgba(4, 0, 7, 0.66)']}
+        colors={neumorphic
+          ? ['rgba(59, 42, 66, 0)', 'rgba(35, 24, 43, 0.32)', 'rgba(22, 14, 28, 0.62)']
+          : ['rgba(18, 4, 17, 0)', 'rgba(9, 1, 11, 0.36)', 'rgba(4, 0, 7, 0.66)']}
         locations={[0, 0.32, 1]}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
@@ -226,7 +261,9 @@ export function VoiceGestureOverlay() {
         }}
       />
       <LinearGradient
-        colors={['rgba(3, 0, 6, 0)', 'rgba(3, 0, 6, 0.84)', 'rgba(2, 0, 5, 0.93)']}
+        colors={neumorphic
+          ? ['rgba(25, 16, 31, 0)', 'rgba(25, 16, 31, 0.74)', 'rgba(18, 11, 23, 0.90)']
+          : ['rgba(3, 0, 6, 0)', 'rgba(3, 0, 6, 0.84)', 'rgba(2, 0, 5, 0.93)']}
         locations={[0, 0.38, 1]}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
@@ -240,8 +277,13 @@ export function VoiceGestureOverlay() {
         }}
       />
 
-      <View
+      <MotiView
         testID="voice-gesture-bubble"
+        animate={{
+          opacity: 1,
+          scale: reducedMotion ? 1 : terminalFeedback ? 0.99 : 1,
+        }}
+        transition={{ type: 'timing', duration: reducedMotion ? 70 : 140 }}
         style={{
           position: 'absolute',
           top: bubbleTop,
@@ -280,9 +322,13 @@ export function VoiceGestureOverlay() {
               <Stop offset="1" stopColor="#050207" stopOpacity="0.14" />
             </SvgLinearGradient>
           </Defs>
+          {neumorphic ? (
+            <Path d={bubblePath} fill={bubbleDepth} transform="translate(0 3)" />
+          ) : null}
           <Path d={bubblePath} fill="url(#voiceBubbleFill)" />
           <Path d={bubblePath} fill="url(#voiceBubbleSheen)" />
           <Path d={bubblePath} fill="url(#voiceBubbleDepth)" />
+          <Path d={bubblePath} fill="none" stroke={bubbleRim} strokeWidth={neumorphic ? 1.1 : 0.7} />
         </Svg>
 
         {terminalFeedback ? (
@@ -290,7 +336,7 @@ export function VoiceGestureOverlay() {
             numberOfLines={1}
             style={{
               maxWidth: bubbleWidth - 24,
-              color: wechatTheme.ink,
+              color: bubbleInk,
               fontSize: 13,
               lineHeight: 18,
               fontWeight: '700',
@@ -302,7 +348,7 @@ export function VoiceGestureOverlay() {
         ) : (
           <>
             {transcribeArmed ? (
-              <View style={{ position: 'absolute', top: bubbleHeight * 0.25, bottom: bubbleHeight * 0.25, left: 22, width: 2, borderRadius: 1, backgroundColor: wechatTheme.peach }} />
+              <View style={{ position: 'absolute', top: bubbleHeight * 0.25, bottom: bubbleHeight * 0.25, left: 22, width: 2, borderRadius: 1, backgroundColor: neumorphic ? '#65739A' : wechatTheme.peach }} />
             ) : null}
             <View
               style={{
@@ -320,25 +366,25 @@ export function VoiceGestureOverlay() {
                 <MotiView
                   key={index}
                   animate={{ scaleY: Math.max(0.14, sample) }}
-                  transition={{ type: 'timing', duration: 150 }}
+                  transition={{ type: 'timing', duration: reducedMotion ? 60 : 120 }}
                   style={{
                     flex: 1,
                     maxWidth: 2.6,
                     height: bubbleHeight * 0.42,
                     borderRadius: 2,
-                    backgroundColor: 'rgba(48, 20, 38, 0.96)',
+                    backgroundColor: waveformInk,
                   }}
                 />
               ))}
             </View>
             {remainingSeconds !== null ? (
-              <Text style={{ position: 'absolute', bottom: 5, color: 'rgba(255, 241, 238, 0.88)', fontSize: 11, lineHeight: 14, fontWeight: '700', fontFamily: nativeUiFont, fontVariant: ['tabular-nums'] }}>
+              <Text style={{ position: 'absolute', bottom: 5, color: neumorphic ? bubbleInk : 'rgba(255, 241, 238, 0.88)', fontSize: 11, lineHeight: 14, fontWeight: '700', fontFamily: nativeUiFont, fontVariant: ['tabular-nums'] }}>
                 {remainingSeconds}s
               </Text>
             ) : null}
           </>
         )}
-      </View>
+      </MotiView>
 
       {!terminalFeedback ? (
         <>
@@ -450,9 +496,9 @@ export function VoiceGestureOverlay() {
             <MotiView
               key={`voice-action-${activeAction}`}
               pointerEvents="none"
-              from={{ opacity: 0.82, scale: 0.99 }}
-              animate={{ opacity: 1, scale: activeAction === 'send' ? 1.02 : 1.025 }}
-              transition={{ type: 'timing', duration: 160 }}
+              from={{ opacity: reducedMotion ? 1 : 0.45 }}
+              animate={{ opacity: 1 }}
+              transition={{ type: 'timing', duration: reducedMotion ? 60 : 135 }}
               style={{
                 position: 'absolute',
                 top: surfaceTop,
@@ -503,8 +549,8 @@ export function VoiceGestureOverlay() {
           ) : null}
 
           <MotiView
-            animate={{ scale: cancelArmed && neumorphic ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: 160 }}
+            animate={{ scale: cancelArmed && neumorphic && !reducedMotion ? 1.025 : 1 }}
+            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
             style={{
               position: 'absolute',
               top: zoneLabelTop,
@@ -530,8 +576,8 @@ export function VoiceGestureOverlay() {
           </MotiView>
 
           <MotiView
-            animate={{ scale: transcribeArmed && neumorphic ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: 160 }}
+            animate={{ scale: transcribeArmed && neumorphic && !reducedMotion ? 1.025 : 1 }}
+            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
             style={{
               position: 'absolute',
               top: zoneLabelTop,
@@ -558,8 +604,8 @@ export function VoiceGestureOverlay() {
           </MotiView>
 
           <MotiView
-            animate={{ scale: activeAction === 'send' && neumorphic ? 1.02 : 1 }}
-            transition={{ type: 'timing', duration: 160 }}
+            animate={{ scale: activeAction === 'send' && neumorphic && !reducedMotion ? 1.02 : 1 }}
+            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
             style={{
               position: 'absolute',
               top: sendLabelTop,

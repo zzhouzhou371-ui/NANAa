@@ -1,3 +1,5 @@
+import { fetch as expoFetch } from 'expo/fetch';
+
 export type NetworkErrorCode = 'TIMEOUT' | 'ABORTED' | 'NETWORK';
 
 export class NetworkRequestError extends Error {
@@ -25,8 +27,8 @@ export const isOfficialGeminiBaseUrl = (baseUrl: string) => {
 };
 
 export async function fetchWithTimeout(
-  input: Parameters<typeof fetch>[0],
-  init: Parameters<typeof fetch>[1] = {},
+  input: Parameters<typeof expoFetch>[0],
+  init: Parameters<typeof expoFetch>[1] = {},
   timeoutMs = 45_000,
 ): Promise<Response> {
   const controller = new AbortController();
@@ -43,7 +45,7 @@ export async function fetchWithTimeout(
   }, timeoutMs);
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    return await expoFetch(input, { ...init, signal: controller.signal });
   } catch (error) {
     if (timedOut) {
       throw new NetworkRequestError('The request timed out. Check your connection and try again.', 'TIMEOUT', { cause: error });

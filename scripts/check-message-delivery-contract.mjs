@@ -126,6 +126,15 @@ expect(
 );
 expect(storeSource.includes("transitionOutgoingTurn(chatId, requestId, 'read')"), 'successful generation must mark the whole user turn read');
 expect(storeSource.includes("transitionOutgoingTurn(chatId, requestId, 'failed', failureMessage)"), 'generation failures must mark the original turn failed');
+const voiceTranscriptionStart = storeSource.indexOf("if (type === 'voice' && finalizedMediaCapture && !initialVoiceTranscript)");
+const voiceTranscriptionEnd = storeSource.indexOf('userText = transcript;', voiceTranscriptionStart);
+const voiceTranscriptionFailureSource = storeSource.slice(voiceTranscriptionStart, voiceTranscriptionEnd);
+expect(
+  voiceTranscriptionStart >= 0
+    && voiceTranscriptionEnd > voiceTranscriptionStart
+    && !voiceTranscriptionFailureSource.includes("transitionOutgoingTurn("),
+  'voice transcription failure must not masquerade as an outgoing transport failure',
+);
 expect(storeSource.includes('cancelMessageDeliveryTimers(chatId);'), 'clearing a chat must cancel its pending delivery timers');
 expect(retrySource.includes('resetFailedMessageDelivery(message, retryAt)'), 'retry must reset failed messages in place');
 expect(retrySource.includes('retryMessageIds'), 'retry must replay the original message IDs');

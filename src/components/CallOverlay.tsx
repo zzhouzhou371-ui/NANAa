@@ -336,6 +336,10 @@ export function CallOverlay() {
   cancelListeningRef.current = cancelListening;
 
   const beginListening = async () => {
+    if (cancelListeningPromiseRef.current) {
+      await cancelListeningPromiseRef.current;
+      return;
+    }
     if (!canListenNow() || finalizingRef.current || captureStartRef.current || recorderActiveRef.current) return;
     const cycle = listenerCycleRef.current + 1;
     listenerCycleRef.current = cycle;
@@ -456,6 +460,7 @@ export function CallOverlay() {
 
   useEffect(() => {
     micEnabledRef.current = true;
+    endingCallRef.current = false;
     listenerCycleRef.current += 1;
     voiceActivityRef.current = null;
     setIsMicEnabled(true);
@@ -463,6 +468,7 @@ export function CallOverlay() {
     setCameraFacing('front');
     setAudioRoute('speaker');
     setFeedback(undefined);
+    void cancelListeningRef.current();
   }, [callOverlay.startedAt, isVideo]);
 
   useEffect(() => {

@@ -72,8 +72,9 @@ baked interaction layers.
   transform instead of relayout, and the gesture overlay and playback bubbles
   use the Kuromi neumorphic material instead of a separate voice visual system.
 - The simulated-phone home remains mounted behind an open app. Closing an app
-  crossfades back to the already-present launcher, so icons and widgets no
-  longer appear to be recreated after every app transition.
+  immediately reveals the already-present launcher without an app-layer fade,
+  so the previous page cannot flash over icons and widgets no longer appear to
+  be recreated after every app transition.
 - Home and WeChat have compact layouts for 320x568-class screens.
 - Core controls expose roles, labels, state, and 44-point-class touch targets.
 
@@ -155,9 +156,19 @@ baked interaction layers.
   documented transcription and standard synthesis request shapes, stores a
   per-character `voice_id`, and never silently substitutes an OpenAI preset.
   Streaming synthesis remains reserved for the future live-call transport.
+- Native Mossland and OpenAI-compatible multipart uploads use Expo SDK 55
+  `File` objects with `expo/fetch`, allowing the runtime to generate the
+  correct multipart boundary instead of passing an unsupported React Native
+  URI object to the server. STT diagnostics now identify input,
+  configuration, request, response, or decode failure while removing API keys
+  from user-visible errors.
 - Failed voice delivery retains the original local audio and transcript. Retry
   reuses the same message instead of recording a duplicate; transcript-only
   recovery can continue as text when the audio file is no longer available.
+- A transcription failure no longer marks an already-recorded, playable voice
+  bubble as a failed message. Leaving the failed convert-to-text state clears
+  its retained capture, so returning to voice starts at hold-to-record instead
+  of reopening the stale retry panel.
 - Character editing exposes real remote voice presets, accepts compatible
   custom voice IDs, and provides an immediate preview. Character profiles also
   expose a one-tap preview. Unsupported official-provider voice IDs fail
@@ -273,6 +284,10 @@ baked interaction layers.
 - The chat surface now uses FlashList recycling and starts from the newest
   messages without animating through older history, so off-screen historical
   bubbles are not all mounted at once.
+- App open/close visibility and chat bottom correction are now instantaneous.
+  The old app tree is hidden before its short unmount grace period, the
+  launcher stays mounted without opacity transitions, and long chats correct
+  to the newest message with `animated: false`.
 - Payment reactions now include persona, recent chat, and relationship context,
   and the character may accept or decline a transfer or red packet. A longer
   bounded provider window reduces false fallbacks; timeout or malformed output
@@ -351,6 +366,17 @@ baked interaction layers.
   export, localization, and the focused Pixel 7 voice/Moments/profile path pass;
   the focused UI report is
   `screenshots/voice-v17-check/report.json`.
+- The 2026-07-30 physical-device repair pass corrected native multipart STT
+  uploads, separated STT enrichment failure from voice-message delivery,
+  recycled call recorders across sessions, cleared stale convert-to-text
+  retries, removed app-shell and chat-history sweep animations, and polished
+  the Kuromi voice gesture, model-list, and Moments-cover surfaces. TypeScript,
+  ESLint, and 18 combined voice, call, delivery, performance, social identity,
+  proactive-chat, theme, storage, and continuity contracts pass. Focused
+  390x844 and 360x800 visual reports are in
+  `screenshots/ui-voice-moments/report.json`,
+  `screenshots/navigation-stability/report.json`, and
+  `screenshots/navigation-long-chat-final/report.json`.
 - The final online wrap-up added six-turn call transcript continuity, bounded
   character reactions to user Moments, semantic sticker replies for ordinary
   chat, Android recovery for Moment photos and sticker imports, and foreground

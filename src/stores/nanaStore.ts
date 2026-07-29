@@ -2695,12 +2695,11 @@ export const useNanaStore = create<NanaStore>()(
             ? transcriptCapture.transcript?.trim()
             : undefined;
           if (!transcript) {
-            transitionOutgoingTurn(
-              chatId,
-              turnId,
-              'failed',
-              transcriptCapture.errorMessage || copy.voiceTranscriptionFailed,
-            );
+            // The audio message was already persisted and entered the normal
+            // delivery lifecycle before transcription began. STT is an
+            // enrichment step for the character reply, not message transport;
+            // a provider/upload failure must not turn a playable voice bubble
+            // into a red "send failed" state.
             set(s => ({
               relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
                 characterId: chatId,

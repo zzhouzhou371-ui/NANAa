@@ -25,6 +25,11 @@ const OPENAI_VOICES = new Set([
   'nova', 'onyx', 'sage', 'shimmer', 'verse',
 ]);
 
+export type AudioAiErrorStage = 'input' | 'configuration' | 'request' | 'response' | 'decode' | 'storage';
+export type AudioAiCaptureResult = MediaCaptureResult & {
+  errorStage?: AudioAiErrorStage;
+};
+
 const normalizeBaseUrl = (apiUrl: string) => (apiUrl || GEMINI_BASE_URL).replace(/\/+$/, '');
 
 const openAIRootUrl = (baseUrl: string) => baseUrl.replace(/\/(v1|v1beta)$/i, '');
@@ -56,15 +61,55 @@ const mimeTypeForUri = (uri: string, fallback = 'audio/m4a') => {
   return fallback;
 };
 
-const fileNameForUri = (uri: string, fallback = 'voice.m4a') => {
-  const clean = uri.split('?')[0].split('#')[0];
-  const name = clean.substring(clean.lastIndexOf('/') + 1);
-  return name || fallback;
+const redactAudioAiError = (value: unknown, apiKey?: string) => {
+  let message = value instanceof Error
+    ? value.message
+    : typeof value === 'string'
+      ? value
+      : '';
+  const trimmedKey = apiKey?.trim();
+  if (trimmedKey) message = message.split(trimmedKey).join('[REDACTED]');
+  return message
+    .replace(/(authorization\s*[:=]\s*bearer)\s+[^\s,;]+/gi, '$1 [REDACTED]')
+    .replace(/([?&](?:key|api[_-]?key|access[_-]?token)=)[^&#\s]+/gi, '$1[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 320);
 };
 
-const readApiError = async (response: Response) => {
+const failedAudioAiCapture = (
+  capture: MediaCaptureResult,
+  errorStage: AudioAiErrorStage,
+  errorMessage: unknown,
+  apiKey?: string,
+): AudioAiCaptureResult => ({
+  phase: 'failed',
+  mediaKind: 'audio',
+  localUri: capture.localUri,
+  durationMillis: capture.durationMillis,
+  durationSec: capture.durationSec,
+  transcript: capture.transcript,
+  errorStage,
+  errorMessage: redactAudioAiError(errorMessage, apiKey) || 'Speech processing failed',
+});
+
+const withFailureStage = (
+  result: MediaCaptureResult,
+  errorStage: AudioAiErrorStage,
+  apiKey?: string,
+): AudioAiCaptureResult => (
+  result.phase === 'failed'
+    ? {
+        ...result,
+        errorStage,
+        errorMessage: redactAudioAiError(result.errorMessage, apiKey) || 'Speech processing failed',
+      }
+    : result
+);
+
+const readApiError = async (response: Response, apiKey?: string) => {
   const payload = await readResponsePayload(response);
-  return responseErrorMessage(response, payload);
+  return redactAudioAiError(responseErrorMessage(response, payload), apiKey);
 };
 
 const shouldTryAlternateAudioModel = (status: number) => (
@@ -94,9 +139,9 @@ async function transcribeOpenAICompatible(params: {
   language: string;
   model?: string;
   signal?: AbortSignal;
-}): Promise<MediaCaptureResult> {
+}): Promise<AudioAiCaptureResult> {
   if (!params.capture.localUri) {
-    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
+    return failedAudioAiCapture(params.capture, 'input', 'No audio captured for transcription');
   }
 
   const file = new File(params.capture.localUri);
@@ -109,7 +154,7 @@ async function transcribeOpenAICompatible(params: {
     isOfficialOpenAIBaseUrl(params.baseUrl),
   )) {
     const form = new FormData();
-    form.append('file', file as unknown as Blob, fileNameForUri(params.capture.localUri));
+    form.append('file', file);
     form.append('model', model);
     form.append('language', params.language.split('-')[0] || 'zh');
 
@@ -122,24 +167,23 @@ async function transcribeOpenAICompatible(params: {
 
     if (response.ok) {
       const data = await response.json();
-      return resolveSpeechToTextResult({
+      return withFailureStage(resolveSpeechToTextResult({
         transcript: data.text || data.transcript || '',
         localUri: params.capture.localUri,
         durationSec: params.capture.durationSec,
-      });
+      }), 'decode', params.apiKey);
     }
 
-    lastError = await readApiError(response);
+    lastError = await readApiError(response, params.apiKey);
     if (!shouldTryAlternateAudioModel(response.status)) break;
   }
 
-  return {
-    phase: 'failed',
-    mediaKind: 'audio',
-    localUri: params.capture.localUri,
-    durationSec: params.capture.durationSec,
-    errorMessage: lastError || 'Speech-to-text failed',
-  };
+  return failedAudioAiCapture(
+    params.capture,
+    'response',
+    lastError || 'Speech-to-text failed',
+    params.apiKey,
+  );
 }
 
 async function transcribeMossland(params: {
@@ -147,17 +191,13 @@ async function transcribeMossland(params: {
   apiKey: string;
   capture: MediaCaptureResult;
   signal?: AbortSignal;
-}): Promise<MediaCaptureResult> {
+}): Promise<AudioAiCaptureResult> {
   if (!params.capture.localUri) {
-    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
+    return failedAudioAiCapture(params.capture, 'input', 'No audio captured for transcription');
   }
 
   const form = new FormData();
-  form.append(
-    'file',
-    new File(params.capture.localUri) as unknown as Blob,
-    fileNameForUri(params.capture.localUri),
-  );
+  form.append('file', new File(params.capture.localUri));
   form.append('model', MOSSLAND_STT_MODEL);
   form.append('response_format', 'json');
   const response = await fetchWithTimeout(
@@ -172,22 +212,21 @@ async function transcribeMossland(params: {
   );
   const payload = await readResponsePayload(response);
   if (!response.ok) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: responseErrorMessage(response, payload),
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'response',
+      responseErrorMessage(response, payload),
+      params.apiKey,
+    );
   }
 
-  return resolveSpeechToTextResult({
+  return withFailureStage(resolveSpeechToTextResult({
     transcript: typeof payload.data?.text === 'string'
       ? payload.data.text
       : payload.text,
     localUri: params.capture.localUri,
     durationSec: params.capture.durationSec,
-  });
+  }), 'decode', params.apiKey);
 }
 
 async function transcribeGeminiAudio(params: {
@@ -197,9 +236,9 @@ async function transcribeGeminiAudio(params: {
   capture: MediaCaptureResult;
   language: string;
   signal?: AbortSignal;
-}): Promise<MediaCaptureResult> {
+}): Promise<AudioAiCaptureResult> {
   if (!params.capture.localUri) {
-    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
+    return failedAudioAiCapture(params.capture, 'input', 'No audio captured for transcription');
   }
 
   const file = new File(params.capture.localUri);
@@ -228,21 +267,20 @@ async function transcribeGeminiAudio(params: {
   }, 30_000);
 
   if (!response.ok) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: await readApiError(response),
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'response',
+      await readApiError(response, params.apiKey),
+      params.apiKey,
+    );
   }
 
   const data = await response.json();
-  return resolveSpeechToTextResult({
+  return withFailureStage(resolveSpeechToTextResult({
     transcript: data.candidates?.[0]?.content?.parts?.map((part: any) => part.text || '').join('').trim(),
     localUri: params.capture.localUri,
     durationSec: params.capture.durationSec,
-  });
+  }), 'decode', params.apiKey);
 }
 
 async function transcribeAudioCaptureUnsafe(params: {
@@ -253,47 +291,42 @@ async function transcribeAudioCaptureUnsafe(params: {
   language: string;
   sttModel?: string;
   signal?: AbortSignal;
-}): Promise<MediaCaptureResult> {
+}): Promise<AudioAiCaptureResult> {
   if (params.capture.phase === 'ready' && params.capture.transcript?.trim()) return params.capture;
   if (!params.capture.localUri) {
-    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
+    return failedAudioAiCapture(params.capture, 'input', 'No audio captured for transcription');
   }
   if (!params.apiKey.trim()) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: 'API key required for speech-to-text',
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'configuration',
+      'API key required for speech-to-text',
+    );
   }
   if (!params.apiUrl.trim()) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: 'Voice API URL is required for speech-to-text',
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'configuration',
+      'Voice API URL is required for speech-to-text',
+      params.apiKey,
+    );
   }
   const audioFile = new File(params.capture.localUri);
   if (!audioFile.exists) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: 'The recorded audio file is no longer available',
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'input',
+      'The recorded audio file is no longer available',
+      params.apiKey,
+    );
   }
   if (audioFile.size > MAX_TRANSCRIPTION_BYTES) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: 'The voice recording is too large to transcribe safely',
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'input',
+      'The voice recording is too large to transcribe safely',
+      params.apiKey,
+    );
   }
 
   const baseUrl = normalizeBaseUrl(params.apiUrl);
@@ -334,17 +367,16 @@ export async function transcribeAudioCapture(params: {
   language: string;
   sttModel?: string;
   signal?: AbortSignal;
-}): Promise<MediaCaptureResult> {
+}): Promise<AudioAiCaptureResult> {
   try {
     return await transcribeAudioCaptureUnsafe(params);
   } catch (error) {
-    return {
-      phase: 'failed',
-      mediaKind: 'audio',
-      localUri: params.capture.localUri,
-      durationSec: params.capture.durationSec,
-      errorMessage: error instanceof Error ? error.message : 'Speech-to-text failed',
-    };
+    return failedAudioAiCapture(
+      params.capture,
+      'request',
+      error instanceof Error ? error.message : 'Speech-to-text failed',
+      params.apiKey,
+    );
   }
 }
 
@@ -437,7 +469,7 @@ async function synthesizeOpenAICompatible(params: {
       };
     }
 
-    lastError = await readApiError(response);
+    lastError = await readApiError(response, params.apiKey);
     if (!shouldTryAlternateAudioModel(response.status)) break;
   }
 
@@ -529,7 +561,7 @@ async function synthesizeMossland(params: {
       mediaKind: 'audio',
       transcript: params.text,
       durationSec: voiceDurationFromText(params.text),
-      errorMessage: await readApiError(response),
+      errorMessage: await readApiError(response, params.apiKey),
     };
   }
   return writeSynthesizedAudio(response, params.text);
@@ -612,7 +644,10 @@ export async function synthesizeSpeechAudio(params: {
       mediaKind: 'audio',
       transcript: params.text.trim(),
       durationSec: voiceDurationFromText(params.text),
-      errorMessage: error instanceof Error ? error.message : 'Text-to-speech failed',
+      errorMessage: redactAudioAiError(
+        error instanceof Error ? error.message : 'Text-to-speech failed',
+        params.apiKey,
+      ),
     };
   }
 }

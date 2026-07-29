@@ -121,7 +121,10 @@ const momentsSource = readFileSync(resolve(root, 'src/components/MomentsView.tsx
 expect(momentsSource.includes('resolveMomentSocialIdentity'), 'Moments must resolve current user identity at render time');
 expect(momentsSource.includes('pickMomentsCoverFromLibrary'), 'Moments cover must open the recoverable system photo picker');
 expect(momentsSource.includes('moments-change-cover'), 'Moments must expose an accessible cover change control');
-expect(momentsSource.includes('moments-reset-cover'), 'custom Moments covers must be resettable');
+expect(
+  momentsSource.includes('onLongPress={bundledCover ? undefined : handleResetCover}'),
+  'custom Moments covers must be resettable by long-pressing the cover',
+);
 expect(momentsSource.includes('cleanupReplacedWallpaper'), 'replaced cover files must not leak');
 const imagePickerSource = readFileSync(resolve(root, 'src/services/nativeImagePickerRuntime.ts'), 'utf8');
 expect(

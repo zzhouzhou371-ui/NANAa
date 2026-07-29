@@ -63,6 +63,11 @@ expect(chatInputSource.includes("previousState !== 'active' && permissionBlocked
 expect(chatInputSource.includes('updateVoiceGestureVisual({'), 'chat capture must publish to the root voice visual layer');
 expect(chatInputSource.includes('finalizeNativeVoiceCapture(capture)'), 'failed convert-to-text must retain the local recording for retry');
 expect(chatInputSource.includes('retryableTranscriptionRef.current = retainedCapture'), 'failed convert-to-text must expose a retryable capture instead of discarding it');
+expect(
+  chatInputSource.includes("if (voiceMode || voicePhase !== 'failed') return;")
+    && chatInputSource.includes('clearRetryableTranscription(true);'),
+  'leaving a failed transcription for the keyboard must discard stale retry state before voice mode is reopened',
+);
 expect(voiceOverlaySource.includes('meteringHistory: number[];'), 'voice visual layer must keep a rolling metering history');
 expect(voiceOverlaySource.includes("slice(-18)"), 'voice visual layer must retain exactly 18 recent metering samples');
 expect(!voiceOverlaySource.includes('waveformBars'), 'voice visual layer must not fall back to a fixed decorative waveform');

@@ -79,6 +79,15 @@ expect(overlaySource.includes("currentCapture.phase === 'capturing'"), 'a comple
 expect(overlaySource.includes('captureIsActive\n        ? await finishCaptureRef.current()'), 'a VAD commit must stop the live recorder even after start ref is cleared');
 expect(overlaySource.includes('callOverlay.speechPhase === \'idle\''), 'automatic listening must only run while the character is idle');
 expect(
+  overlaySource.includes('if (cancelListeningPromiseRef.current) {\n      await cancelListeningPromiseRef.current;\n      return;\n    }'),
+  'call listening must wait for stale recorder cancellation before opening a new segment',
+);
+expect(
+  overlaySource.includes('endingCallRef.current = false;')
+    && overlaySource.includes('void cancelListeningRef.current();'),
+  'a replacement call session must reset end-call state and recycle any recorder from the previous session',
+);
+expect(
   overlaySource.includes('invalidateActiveCallVoiceInput(callStartedAtRef.current)'),
   'muting or backgrounding must delegate pending-call invalidation to the store',
 );

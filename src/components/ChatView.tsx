@@ -217,7 +217,10 @@ export function ChatView() {
   useEffect(() => {
     if (!activeChatId || initialScrollChatId.current !== activeChatId) return;
     if (messageCount !== lastMessageCount.current || kbHeight > 0) {
-      const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 40);
+      // FlashList needs an explicit correction when a hydrated or stress-test
+      // history replaces the current data. Keep it instantaneous: page entry
+      // and keyboard changes must never animate the whole history.
+      const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 40);
       lastMessageCount.current = messageCount;
       return () => clearTimeout(timer);
     }

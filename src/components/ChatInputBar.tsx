@@ -461,6 +461,13 @@ export function ChatInputBar() {
   }, [callOverlayVisible, clearVoiceGesture]);
 
   useEffect(() => {
+    if (voiceMode || voicePhase !== 'failed') return;
+    clearRetryableTranscription(true);
+    resetNativeVoiceCaptureRef.current();
+    clearVoiceGesture();
+  }, [clearRetryableTranscription, clearVoiceGesture, voiceMode, voicePhase]);
+
+  useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;

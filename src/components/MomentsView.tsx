@@ -8,9 +8,7 @@ import {
 } from 'react-native';
 import {
   Heart,
-  ImagePlus,
   MessageCircle,
-  RotateCcw,
   Send,
 } from 'lucide-react-native';
 import { useNanaStore } from '../stores/nanaStore';
@@ -97,6 +95,9 @@ export function MomentsView({
     coverReset: isChinese ? '已恢复默认封面' : 'Default cover restored',
     coverFailed: isChinese ? '无法更换朋友圈封面' : 'Could not update Moments cover',
   }), [isChinese]);
+  const coverAccessibilityHint = bundledCover
+    ? copy.changeCover
+    : `${copy.changeCover}. ${isChinese ? '长按可恢复默认封面' : 'Long press to restore the default cover.'}`;
 
   const handleChooseCover = async () => {
     if (coverPickerBusy) return;
@@ -245,13 +246,32 @@ export function MomentsView({
       keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ paddingBottom: 28 }}
     >
-      <View style={{ marginHorizontal: 3, borderRadius: 20, overflow: 'hidden' }}>
+      <AnimatedPressable
+        testID="moments-change-cover"
+        accessibilityRole="button"
+        accessibilityLabel={copy.changeCover}
+        accessibilityHint={coverAccessibilityHint}
+        accessibilityState={{ busy: coverPickerBusy }}
+        disabled={coverPickerBusy}
+        onPress={() => { void handleChooseCover(); }}
+        onLongPress={bundledCover ? undefined : handleResetCover}
+        scale={0.99}
+        style={{
+          width: 'auto',
+          height: 142,
+          marginHorizontal: 3,
+          borderRadius: 20,
+          borderCurve: 'continuous',
+          overflow: 'hidden',
+          opacity: coverPickerBusy ? 0.72 : 1,
+        }}
+      >
         <ExpoImage
           source={bundledCover ? wechatAssets.momentsCover : { uri: normalizedCover }}
           contentFit="cover"
           transition={160}
           style={{ width: '100%', height: 142 }}
-          accessibilityLabel={isChinese ? '朋友圈封面' : 'Moments cover'}
+          accessible={false}
         />
         <View
           pointerEvents="none"
@@ -264,54 +284,7 @@ export function MomentsView({
             backgroundColor: 'rgba(42,31,54,0.16)',
           }}
         />
-        <View
-          style={{
-            position: 'absolute',
-            right: 8,
-            bottom: 8,
-            flexDirection: 'row',
-            gap: 7,
-          }}
-        >
-          <AnimatedPressable
-            testID="moments-change-cover"
-            accessibilityRole="button"
-            accessibilityLabel={copy.changeCover}
-            accessibilityState={{ busy: coverPickerBusy }}
-            disabled={coverPickerBusy}
-            onPress={() => { void handleChooseCover(); }}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 15,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: 'rgba(48,37,55,0.78)',
-              opacity: coverPickerBusy ? 0.6 : 1,
-            }}
-          >
-            <ImagePlus size={18} color={neumorphicPalette.onBerry} />
-          </AnimatedPressable>
-          {!bundledCover ? (
-            <AnimatedPressable
-              testID="moments-reset-cover"
-              accessibilityRole="button"
-              accessibilityLabel={copy.resetCover}
-              onPress={handleResetCover}
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: 15,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: 'rgba(48,37,55,0.78)',
-              }}
-            >
-              <RotateCcw size={17} color={neumorphicPalette.onBerry} />
-            </AnimatedPressable>
-          ) : null}
-        </View>
-      </View>
+      </AnimatedPressable>
 
       <View style={{ paddingHorizontal: 3, paddingTop: 16 }}>
         {momentsList.length === 0 ? (

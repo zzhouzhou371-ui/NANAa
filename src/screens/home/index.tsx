@@ -217,6 +217,11 @@ function AppOverlay() {
   const reduceMotionEnabled = useReduceMotionEnabled();
   const [chatHeaderMenu, setChatHeaderMenu] = useState<ChatHeaderMenu>('none');
   const activeApp = storeActiveApp ?? renderedApp;
+  const appLayerUnmountGrace = {
+    // Keep the just-closed tree alive briefly so a rapid reopen can reuse it,
+    // but hide it immediately instead of fading the old page over the desktop.
+    duration: reduceMotionEnabled ? 100 : 220,
+  };
   const isCallActive = activeApp === 'wechat' && callOverlay.show;
   const shellInk = wechatTheme.ink;
   const shellMuted = wechatTheme.inkMuted;
@@ -262,10 +267,10 @@ function AppOverlay() {
     if (!renderedApp) return undefined;
     const timer = setTimeout(
       () => setRenderedApp(null),
-      reduceMotionEnabled ? 100 : 220,
+      appLayerUnmountGrace.duration,
     );
     return () => clearTimeout(timer);
-  }, [reduceMotionEnabled, renderedApp, storeActiveApp]);
+  }, [appLayerUnmountGrace.duration, renderedApp, storeActiveApp]);
 
   useEffect(() => {
     if (chatHeaderMenu === 'none' || Platform.OS !== 'android') return undefined;
@@ -584,14 +589,19 @@ function AppOverlay() {
   if (!activeApp) return null;
 
   return (
-    <MotiView
-      from={{ opacity: 0 }}
-      animate={{ opacity: storeActiveApp ? 1 : 0 }}
-      transition={{
-        type: 'timing',
-        duration: reduceMotionEnabled ? 100 : 220,
+    <View
+      pointerEvents={storeActiveApp ? 'auto' : 'none'}
+      accessibilityElementsHidden={!storeActiveApp}
+      importantForAccessibility={storeActiveApp ? 'auto' : 'no-hide-descendants'}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 40,
+        display: storeActiveApp ? 'flex' : 'none',
       }}
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }}
     >
       <View style={{ flex: 1 }}>
         <View
@@ -603,7 +613,7 @@ function AppOverlay() {
         />
         {content}
       </View>
-    </MotiView>
+    </View>
   );
 }
 
@@ -648,7 +658,7 @@ export default function HomeScreen() {
           pointerEvents={activeApp ? 'none' : 'auto'}
           accessibilityElementsHidden={Boolean(activeApp)}
           importantForAccessibility={activeApp ? 'no-hide-descendants' : 'auto'}
-          style={{ flex: 1, opacity: activeApp ? 0 : 1 }}
+          style={{ flex: 1, display: activeApp ? 'none' : 'flex' }}
         >
           <MotiView
             animate={{ paddingTop: homeTopPadding }}

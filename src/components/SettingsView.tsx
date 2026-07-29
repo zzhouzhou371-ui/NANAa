@@ -325,32 +325,58 @@ export function SettingsView() {
           </View>
 
           {models.length > 0 ? (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 9 }}>
-              {models.map(model => {
-                const selected = selectedModel === model;
-                return (
-                  <AnimatedPressable
-                    key={model}
-                    accessibilityRole="button"
-                    accessibilityLabel={model}
-                    accessibilityState={{ selected }}
-                    onPress={() => set({ selectedModel: model })}
-                    style={{ minHeight: 36, borderRadius: 999 }}
-                  >
-                    <NeumorphicSurface
-                      pointerEvents="none"
-                      depth={selected ? 'raisedSmall' : 'inset'}
-                      tone={selected ? 'pinkGold' : 'lavender'}
-                      radius={999}
-                      fill={false}
-                      contentStyle={{ minHeight: 36, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
+            <NeumorphicSurface
+              depth="inset"
+              tone="base"
+              radius={15}
+              fill={false}
+              style={{ maxHeight: 164 }}
+              contentStyle={{ maxHeight: 164, overflow: 'hidden' }}
+            >
+              <ScrollView
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={models.length > 6}
+                keyboardShouldPersistTaps="handled"
+                style={{ maxHeight: 164 }}
+                contentContainerStyle={{
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  gap: 9,
+                  padding: 11,
+                }}
+              >
+                {models.map(model => {
+                  const selected = selectedModel === model;
+                  return (
+                    <AnimatedPressable
+                      key={model}
+                      accessibilityRole="button"
+                      accessibilityLabel={model}
+                      accessibilityState={{ selected }}
+                      onPress={() => set({ selectedModel: model })}
+                      style={{ minHeight: 36, maxWidth: '100%', borderRadius: 999 }}
                     >
-                      <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: selected ? '800' : '600' }}>{model}</Text>
-                    </NeumorphicSurface>
-                  </AnimatedPressable>
-                );
-              })}
-            </View>
+                      <NeumorphicSurface
+                        pointerEvents="none"
+                        depth={selected ? 'raisedSmall' : 'flat'}
+                        tone={selected ? 'pinkGold' : 'lavender'}
+                        radius={999}
+                        fill={false}
+                        contentStyle={{ minHeight: 36, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
+                      >
+                        <Text
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                          style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: selected ? '800' : '600', maxWidth: '100%' }}
+                        >
+                          {model}
+                        </Text>
+                      </NeumorphicSurface>
+                    </AnimatedPressable>
+                  );
+                })}
+              </ScrollView>
+            </NeumorphicSurface>
           ) : null}
         </NeumorphicSurface>
 
