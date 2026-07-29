@@ -14,7 +14,10 @@ import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Moment } from '../types';
 import { AnimatedPressable } from './primitives';
-import { pickPhotoFromLibrary } from '../services/nativeImagePickerRuntime';
+import {
+  discardPickedPhoto,
+  pickMomentPhotoFromLibrary,
+} from '../services/nativeImagePickerRuntime';
 import {
   NeumorphicSurface,
   neumorphicPalette,
@@ -46,7 +49,7 @@ export function ComposeMomentOverlay({
 
   const handlePickImage = async () => {
     set({ islandNotification: { title: t.moment, desc: t.openingPhotoLibrary, status: 'processing' } });
-    const capture = await pickPhotoFromLibrary();
+    const capture = await pickMomentPhotoFromLibrary({ text: momentText });
     if (capture.canceled) {
       set({ islandNotification: null });
       return;
@@ -56,11 +59,14 @@ export function ComposeMomentOverlay({
       setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2200);
       return;
     }
+    const previousUri = useNanaStore.getState().momentImageUrl;
     set({ momentImageUrl: capture.localUri, islandNotification: null });
+    if (previousUri && previousUri !== capture.localUri) discardPickedPhoto(previousUri);
   };
 
   const close = () => {
     if (publishing) return;
+    discardPickedPhoto(useNanaStore.getState().momentImageUrl);
     set({ showComposeMoment: false, momentText: '', momentImageUrl: '' });
   };
 
@@ -209,7 +215,10 @@ export function ComposeMomentOverlay({
                 <AnimatedPressable
                   accessibilityRole="button"
                   accessibilityLabel={t.removePhoto}
-                  onPress={() => set({ momentImageUrl: '' })}
+                  onPress={() => {
+                    discardPickedPhoto(useNanaStore.getState().momentImageUrl);
+                    set({ momentImageUrl: '' });
+                  }}
                   style={{
                     position: 'absolute',
                     top: 7,

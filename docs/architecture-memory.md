@@ -359,6 +359,23 @@ its durable audio URI, duration, and transcript. Retry reuses the original
 message identity and media; UI code must not append a second bubble merely to
 retry recognition or delivery.
 
+Connected calls use the normal model boundary plus a bounded live-call
+transcript window. `callConversationRuntime` converts the latest twelve ordered
+user/character transcript lines into compatible message history, appends them
+after durable chat history, and removes only the duplicated current utterance
+at the tail. Raw call turns stay transient until hang-up writes the existing
+call log and relationship trace.
+
+Moment post photos and sticker imports are Android-recoverable picker intents.
+The intent records only the minimum routing state: Moment text draft, or sticker
+scope and relationship owner. Recovered files must be committed through the
+existing store actions or deleted when canceled, invalid, or orphaned.
+
+Character reactions to a user Moment are bounded relationship events, not a
+fan-out memory write at publish time. Eligibility is rechecked before commit,
+only an actual character comment writes a character-specific trace, and likes
+alone remain lightweight social state.
+
 Do not import native audio, camera, or video modules directly into chat
 components. Add native capability behind this service or a closely related
 runtime service, then return normalized states/results to the store.
@@ -391,6 +408,12 @@ copy and accent in place; they do not replace the island, translate labels
 vertically, or relayout waveform bars. Home and app surfaces follow the same
 continuity rule: the launcher remains mounted behind the active app and is
 revealed after the app exit crossfade.
+
+Keeping the launcher mounted must not mean keeping it busy. When another app is
+open or the host app leaves the foreground, the launcher content is visually
+hidden and its weather/sky clocks and loops pause. The selected wallpaper
+renderer remains mounted so the return transition has no black frame or
+background reconstruction.
 
 ## Phone Chrome And Weather Runtime
 

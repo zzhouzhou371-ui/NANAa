@@ -444,9 +444,153 @@ expect(localMediaSource.includes('promoteStagedAvatar'), 'media repository must 
 const imagePickerSource = readFileSync(resolve(root, 'src/services/nativeImagePickerRuntime.ts'), 'utf8');
 expect(imagePickerSource.includes('ImageManipulator.manipulate'), 'avatar picker must normalize selected photos before persistence');
 expect(imagePickerSource.includes('recoverPendingImagePickerSelection'), 'avatar picker must support Android process-death recovery');
+expect(imagePickerSource.includes("kind: 'moment-photo'"), 'moment photo picker must persist an explicit draft recovery intent');
+expect(imagePickerSource.includes("kind: 'sticker-import'"), 'multi-sticker picker must persist an explicit scope recovery intent');
 expect(imagePickerSource.includes('createUserAvatarStatePatch'), 'user avatar changes must update persisted outgoing avatar references together');
 expect(imagePickerSource.includes("message.sender === 'user' ? { ...message, avatar }"), 'user avatar patch must rewrite historical outgoing message avatars');
 expect(imagePickerSource.includes("moment.authorId === 'me' || moment.authorId === 'user'"), 'user avatar patch must rewrite user-authored moment avatars');
+
+const pickerStorage = new Map();
+const pickerCalls = { deleted: [], finalized: [] };
+let pendingPickerResult = null;
+let launchedPickerResult = { canceled: true, assets: null };
+const asyncStorageMock = {
+  getItem: async key => pickerStorage.get(key) ?? null,
+  setItem: async (key, value) => { pickerStorage.set(key, value); },
+  multiRemove: async keys => { keys.forEach(key => pickerStorage.delete(key)); },
+};
+const nativeImagePicker = loadTypeScriptModule(
+  resolve(root, 'src/services/nativeImagePickerRuntime.ts'),
+  {
+    'react-native': { Platform: { OS: 'android' } },
+    'expo-image-picker': {
+      UIImagePickerPreferredAssetRepresentationMode: { Compatible: 'compatible' },
+      getPendingResultAsync: async () => pendingPickerResult,
+      launchImageLibraryAsync: async () => launchedPickerResult,
+      launchCameraAsync: async () => launchedPickerResult,
+      requestCameraPermissionsAsync: async () => ({ granted: true }),
+    },
+    'expo-image-manipulator': {
+      ImageManipulator: { manipulate: () => { throw new Error('Avatar normalization was not expected'); } },
+      SaveFormat: { JPEG: 'jpeg' },
+    },
+    'expo-file-system': { File: class File {} },
+    '@react-native-async-storage/async-storage': asyncStorageMock,
+    './mediaRuntime': mediaRuntime,
+    './localMediaRepository': {
+      deletePersistedMediaFile: uri => {
+        pickerCalls.deleted.push(uri);
+        return true;
+      },
+      discardTemporaryMediaFile: () => false,
+      finalizeLocalMediaFile: (uri, kind) => {
+        pickerCalls.finalized.push({ uri, kind });
+        return `file:///document/nana-media/${kind}/${uri.split('/').at(-1)}`;
+      },
+    },
+  },
+);
+
+await nativeImagePicker.pickMomentPhotoFromLibrary({ text: 'draft survives' });
+expect(
+  !pickerStorage.has(nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY),
+  'a normally canceled moment picker must clear its pending intent',
+);
+await nativeImagePicker.pickStickersFromLibrary({ scope: 'relationship', characterId: 'luna-id' });
+expect(
+  !pickerStorage.has(nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY),
+  'a normally canceled sticker picker must clear its pending intent',
+);
+
+await asyncStorageMock.setItem(
+  nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY,
+  JSON.stringify({ kind: 'moment-photo', draft: { text: 'restored text' } }),
+);
+pendingPickerResult = {
+  canceled: false,
+  assets: [{
+    uri: 'file:///cache/moment.jpg',
+    fileName: 'moment.jpg',
+    mimeType: 'image/jpeg',
+    type: 'image',
+    width: 1200,
+    height: 800,
+  }],
+};
+const recoveredMomentPhoto = await nativeImagePicker.recoverPendingImagePickerSelection();
+expect(recoveredMomentPhoto?.intent.kind === 'moment-photo', 'Android recovery must preserve the moment-photo intent');
+expect(
+  recoveredMomentPhoto?.intent.draft?.text === 'restored text',
+  'Android recovery must preserve the moment composer text',
+);
+expect(
+  recoveredMomentPhoto?.result.phase === 'ready'
+    && recoveredMomentPhoto.result.localUri.includes('/images/'),
+  'Android moment recovery must promote the selected photo before restoring the composer',
+);
+
+await asyncStorageMock.setItem(
+  nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY,
+  JSON.stringify({ kind: 'sticker-import', scope: 'relationship', characterId: 'luna-id' }),
+);
+pendingPickerResult = {
+  canceled: false,
+  assets: [
+    {
+      uri: 'file:///cache/happy.gif',
+      fileName: 'happy.gif',
+      mimeType: 'image/gif',
+      type: 'image',
+      width: 256,
+      height: 256,
+      fileSize: 1024,
+    },
+    {
+      uri: 'file:///cache/too-large.png',
+      fileName: 'too-large.png',
+      mimeType: 'image/png',
+      type: 'image',
+      width: 512,
+      height: 512,
+      fileSize: 9 * 1024 * 1024,
+    },
+  ],
+};
+const recoveredStickers = await nativeImagePicker.recoverPendingImagePickerSelection();
+expect(
+  recoveredStickers?.intent.kind === 'sticker-import'
+    && recoveredStickers.intent.scope === 'relationship'
+    && recoveredStickers.intent.characterId === 'luna-id',
+  'Android recovery must retain the destination relationship for sticker imports',
+);
+expect(
+  recoveredStickers?.result.purpose === 'sticker'
+    && recoveredStickers.result.assets.length === 1
+    && recoveredStickers.result.rejectedCount === 1
+    && recoveredStickers.result.assets[0].animated,
+  'Android sticker recovery must promote valid originals and reject invalid assets',
+);
+nativeImagePicker.discardPickedStickers(recoveredStickers.result.assets);
+expect(
+  pickerCalls.deleted.includes(recoveredStickers.result.assets[0].uri),
+  'discarding an uncommitted recovered sticker import must remove its promoted files',
+);
+
+await asyncStorageMock.setItem(
+  nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY,
+  JSON.stringify({ kind: 'sticker-import', scope: 'global' }),
+);
+pendingPickerResult = { code: 'E_PICKER', message: 'Picker failed' };
+const failedStickerRecovery = await nativeImagePicker.recoverPendingImagePickerSelection();
+expect(
+  failedStickerRecovery?.result.purpose === 'sticker'
+    && failedStickerRecovery.result.errorMessage === 'Picker failed',
+  'Android sticker recovery must surface native picker failures without fabricating assets',
+);
+expect(
+  !pickerStorage.has(nativeImagePicker.PENDING_IMAGE_PICKER_INTENT_KEY),
+  'Android recovery must consume the pending intent after success, cancel, or failure',
+);
 
 const avatarValue = loadTypeScriptModule(resolve(root, 'src/services/avatarValueRuntime.ts'));
 expect(avatarValue.normalizeAvatarValue('🌙', 'web').ok, 'web avatar text/emoji must remain supported');

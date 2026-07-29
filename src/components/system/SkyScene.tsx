@@ -27,6 +27,11 @@ const SKY_PHASES: SkyPhase[] = ['dawn', 'day', 'dusk', 'night'];
 const PHASE_ANCHORS = [5.75, 12.5, 18.25, 23.25];
 const SKY_FALLBACK = ['#10192E', '#25304B', '#5B4965', '#1A203A'] as [string, string, string, string];
 
+function readLocalHour() {
+  const now = new Date();
+  return now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+}
+
 function homeWallpaperScrim(wallpaperId: string) {
   if (wallpaperId === 'peach-quiet') return 'rgba(8, 11, 29, 0.14)';
   if (wallpaperId === 'blue-hour') return 'rgba(8, 11, 29, 0.10)';
@@ -35,17 +40,15 @@ function homeWallpaperScrim(wallpaperId: string) {
   return null;
 }
 
-function useLocalHour() {
-  const read = () => {
-    const now = new Date();
-    return now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
-  };
-  const [hour, setHour] = useState(read);
+function useLocalHour(active: boolean) {
+  const [hour, setHour] = useState(readLocalHour);
 
   useEffect(() => {
-    const timer = setInterval(() => setHour(read()), 30_000);
+    if (!active) return undefined;
+    setHour(readLocalHour());
+    const timer = setInterval(() => setHour(readLocalHour()), 30_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [active]);
 
   return hour;
 }
@@ -84,13 +87,14 @@ function skyWeights(localHour: number): Record<SkyPhase, number> {
 }
 
 interface SkySceneProps {
+  active?: boolean;
   variant?: SkyVariant;
   overrideHour?: number | null;
 }
 
 /** One shared sky environment for the desktop and every app surface. */
-export function SkyScene({ variant = 'home', overrideHour = null }: SkySceneProps) {
-  const localHour = useLocalHour();
+export function SkyScene({ active = true, variant = 'home', overrideHour = null }: SkySceneProps) {
+  const localHour = useLocalHour(active);
   const effectiveHour = overrideHour ?? localHour;
   const reducedMotion = useReducedMotion();
   const wallpaperId = useNanaStore(state => state.themeConfig.wallpaperId);
@@ -99,7 +103,7 @@ export function SkyScene({ variant = 'home', overrideHour = null }: SkySceneProp
   const [failedWallpaperKey, setFailedWallpaperKey] = useState('');
   // Full-screen ambient transforms are expensive on Android emulators and
   // low/mid-range devices. Preserve the blended sky but keep it static there.
-  const staticScene = reducedMotion || Platform.OS === 'android';
+  const staticScene = reducedMotion || Platform.OS === 'android' || !active;
   const weights = useMemo(() => skyWeights(effectiveHour), [effectiveHour]);
   const visiblePhases = useMemo(
     () => SKY_PHASES.filter(skyPhase => weights[skyPhase] > 0.001),

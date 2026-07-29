@@ -235,6 +235,17 @@ baked interaction layers.
   to `User` or render a local file path as text.
 - The Moments cover can be selected from the system photo library, survives
   Android picker recovery, and can be reset to the bundled default.
+- User-authored Moments now enter a bounded character-reaction loop. At most
+  two eligible friends react, one may leave a persona-aware comment, and a real
+  comment becomes relationship evidence for that character. Blocked and
+  removed relationships are rechecked before commit.
+- Character sticker use is no longer limited to replying to another sticker.
+  A normal generated reply may select a matching global or relationship
+  sticker through deterministic semantic and frequency gates.
+- Android picker recovery now covers Moment post photos and global or
+  relationship sticker imports. The draft text, sticker scope, and relationship
+  owner survive activity recreation; canceled, rejected, or orphaned promoted
+  files are cleaned safely.
 - Relationship notifications are now an explicit global opt-in in Settings.
   The native runtime schedules only the next eligible character reminder,
   preserves the existing global cooldown and resting-window rules, and cancels
@@ -246,6 +257,10 @@ baked interaction layers.
 - Call STT/LLM/TTS work is isolated by call-session token and input epoch,
   including playback side effects. Muting, backgrounding, ending the call, or
   starting a new AI turn invalidates stale capture work.
+- Each model turn in a connected call receives the most recent twelve ordered
+  call transcript lines in addition to normal chat history. The current user
+  utterance is deduplicated at the boundary, so longer calls retain their
+  actual wording without double-injecting the newest speech segment.
 - API keys use SecureStore on native and session memory on web. AsyncStorage
   migration removes legacy plaintext only after safe migration.
 - Export/import is redacted, schema/size/field validated, version checked, and
@@ -270,6 +285,11 @@ baked interaction layers.
 - Character reply-preference pills now have explicit intrinsic height and a
   non-flexing text layer. Enabling voice or video fields cannot collapse their
   labels during Android layout recalculation.
+- The launcher remains mounted for app-transition continuity, but its content
+  is hidden beneath active apps and its weather/sky timers and looping motion
+  pause whenever an app is open or Nana is not foreground-active. App headers
+  subscribe only to the current chat, and each bubble observes only its own
+  selection state, reducing background work without remounting the desktop.
 
 ## Verification
 
@@ -331,6 +351,13 @@ baked interaction layers.
   export, localization, and the focused Pixel 7 voice/Moments/profile path pass;
   the focused UI report is
   `screenshots/voice-v17-check/report.json`.
+- The final online wrap-up added six-turn call transcript continuity, bounded
+  character reactions to user Moments, semantic sticker replies for ordinary
+  chat, Android recovery for Moment photos and sticker imports, and foreground
+  animation/subscription throttling. Call, Moments, stickers, media, performance,
+  delivery, theme, and glass contracts pass together with TypeScript, ESLint,
+  a clean Android export, and the corrected Pixel 7 visual path at
+  `screenshots/online-wrap-visual-fix/report.json`.
 - The final pre-offline online integration pass completed every repository
   contract plus TypeScript, ESLint, localization, and Android export. Its full
   four-viewport UI path covers Settings voice service, character voice editing,
@@ -413,12 +440,13 @@ have a clear relationship job and write to the same trace system.
 
 ## Next Recommended Work
 
-1. Prepare the next intentional Android test build only after this online-social
-   slice is committed, then verify Mossland STT/TTS with a real key and
-   `voice_id`, failed-voice retry, recording/playback smoothness, global identity,
-   Moments cover replacement, global/relationship GIF stickers, album
-   permissions, character photo sharing, user-photo understanding, and several
-   persona-dependent transfer/red-packet accept and decline cases.
+1. Prepare the next intentional Android test build only after this online
+   wrap-up is committed, then verify Mossland STT/TTS with a real key and
+   `voice_id`, multi-turn call continuity, failed-voice retry,
+   recording/playback smoothness, Moment character reactions, Android picker
+   restoration, global/relationship GIF stickers, global identity, Moments
+   cover replacement, character photo sharing, user-photo understanding, and
+   several persona-dependent transfer/red-packet accept and decline cases.
 2. In the same long physical-device session, verify autonomous Moments timing,
    likes/comments, sustained chat continuity, notification allow/deny and tap
    routing, battery temperature, and app-to-chat transition smoothness.

@@ -1,5 +1,5 @@
-import { Alert, BackHandler, Keyboard, Platform, Pressable, StyleSheet, View, Text, ScrollView, useWindowDimensions } from 'react-native';
-import { useEffect, useState, type ReactNode } from 'react';
+import { Alert, AppState, BackHandler, Keyboard, Platform, Pressable, StyleSheet, View, Text, ScrollView, useWindowDimensions, type AppStateStatus } from 'react-native';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { MotiView } from 'moti';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -62,6 +62,19 @@ const APPS = [
   { labelKey: 'sounds', icon: <Music size={21} color="#9A3B6E" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/sounds.png') },
   { labelKey: 'photos', icon: <Image size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/photos.png') },
 ];
+
+const DesktopRuntimeActivityContext = createContext(true);
+
+function useAppStateActive() {
+  const [appState, setAppState] = useState<AppStateStatus>(() => AppState.currentState ?? 'active');
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', setAppState);
+    return () => subscription.remove();
+  }, []);
+
+  return appState === 'active';
+}
 
 function AppContent({ activeApp }: { activeApp: string | null }) {
   if (activeApp === 'wechat') return <WeChatRootView />;
@@ -187,7 +200,7 @@ function AppOverlay() {
   const weChatTab = useNanaStore(s => s.weChatTab);
   const activeChatId = useNanaStore(s => s.activeChatId);
   const characters = useNanaStore(s => s.characters);
-  const chatHistory = useNanaStore(s => s.chatHistory);
+  const activeMessages = useNanaStore(s => activeChatId ? s.chatHistory[activeChatId] : undefined);
   const pendingChatRequests = useNanaStore(s => s.pendingChatRequests);
   const worldBookView = useNanaStore(s => s.worldBookView);
   const worldBookCharId = useNanaStore(s => s.worldBookCharId);
@@ -214,12 +227,18 @@ function AppOverlay() {
 
   const activeCharacter = activeChatId ? characters.find(c => c.id === activeChatId) : undefined;
   const charName = activeCharacter?.name || '';
-  const activeMessages = activeChatId ? (chatHistory[activeChatId] || []) : [];
-  const latestConversationMessage = [...activeMessages].reverse().find(message => message.sender !== 'system');
+  const latestConversationTime = useMemo(() => {
+    if (!activeMessages) return undefined;
+    for (let index = activeMessages.length - 1; index >= 0; index -= 1) {
+      const message = activeMessages[index];
+      if (message.sender !== 'system') return message.time;
+    }
+    return undefined;
+  }, [activeMessages]);
   const headerActivity = activeChatId && pendingChatRequests[activeChatId]
     ? t.composingReply
-    : latestConversationMessage?.time
-      ? t.lastExchange.replace('{time}', latestConversationMessage.time)
+    : latestConversationTime
+      ? t.lastExchange.replace('{time}', latestConversationTime)
       : t.newConversation;
   const worldBookCharName = worldBookCharId ? characters.find(c => c.id === worldBookCharId)?.name : '';
   const isWeChatChat = activeApp === 'wechat' && weChatPage === 'chat' && !!activeChatId;
@@ -493,7 +512,7 @@ function AppOverlay() {
                   {charName}
                 </Text>
                 <Text numberOfLines={1} style={{ maxWidth: '100%', color: shellMuted, fontSize: 11, lineHeight: 14, marginTop: 1 }}>
-                  {compactWidth && latestConversationMessage?.time ? latestConversationMessage.time : headerActivity}
+                  {compactWidth && latestConversationTime ? latestConversationTime : headerActivity}
                 </Text>
               </View>
             </Pressable>
@@ -588,8 +607,13 @@ function AppOverlay() {
   );
 }
 
-function AmbientBackground({ overrideHour }: { overrideHour?: number | null }) {
-  return <SkyScene overrideHour={overrideHour} />;
+function AmbientBackground({
+  overrideHour,
+}: {
+  overrideHour?: number | null;
+}) {
+  const active = useContext(DesktopRuntimeActivityContext);
+  return <SkyScene active={active} overrideHour={overrideHour} />;
 }
 
 export default function HomeScreen() {
@@ -604,24 +628,27 @@ export default function HomeScreen() {
   const contentWidth = Math.min(width - (compactGrid ? 22 : 36), 390);
   const islandExpanded = useDynamicIslandExpanded();
   const reduceMotionEnabled = useReduceMotionEnabled();
+  const appStateActive = useAppStateActive();
+  const desktopRuntimeActive = appStateActive && !activeApp;
   const islandTopOffset = chromeStyle === 'neumorphic-v1' ? 5 : compactHeight ? 4 : 10;
   const islandSafeHeight = islandExpanded ? (compactHeight ? 60 : 66) : 44;
   const homeTopPadding = insets.top + islandTopOffset + islandSafeHeight + 8;
 
   return (
-    <ThickGlassBackdropProvider>
-      <View style={{ flex: 1, backgroundColor: palette.canvas }}>
-        <ThickGlassBackdropTarget
-          pointerEvents="none"
-          style={StyleSheet.absoluteFillObject}
-        >
-          <AmbientBackground />
-        </ThickGlassBackdropTarget>
+    <DesktopRuntimeActivityContext.Provider value={desktopRuntimeActive}>
+      <ThickGlassBackdropProvider>
+        <View style={{ flex: 1, backgroundColor: palette.canvas }}>
+          <ThickGlassBackdropTarget
+            pointerEvents="none"
+            style={StyleSheet.absoluteFillObject}
+          >
+            <AmbientBackground />
+          </ThickGlassBackdropTarget>
         <View
           pointerEvents={activeApp ? 'none' : 'auto'}
           accessibilityElementsHidden={Boolean(activeApp)}
           importantForAccessibility={activeApp ? 'no-hide-descendants' : 'auto'}
-          style={{ flex: 1 }}
+          style={{ flex: 1, opacity: activeApp ? 0 : 1 }}
         >
           <MotiView
             animate={{ paddingTop: homeTopPadding }}
@@ -635,7 +662,7 @@ export default function HomeScreen() {
               contentContainerStyle={{ width: contentWidth, flexGrow: 1, paddingBottom: compactHeight ? 6 : 18 }}
             >
               <View style={{ marginTop: 2 }}>
-                <HomeWeatherWidget compact={compactGrid} />
+                <HomeWeatherWidget active={desktopRuntimeActive} compact={compactGrid} />
               </View>
 
               <View
@@ -689,8 +716,9 @@ export default function HomeScreen() {
           </MotiView>
         </View>
 
-        <AppOverlay />
-      </View>
-    </ThickGlassBackdropProvider>
+          <AppOverlay />
+        </View>
+      </ThickGlassBackdropProvider>
+    </DesktopRuntimeActivityContext.Provider>
   );
 }

@@ -26,6 +26,7 @@ import {
   resolveCharacterReplyType,
   type MediaCaptureResult,
 } from '../services/mediaRuntime';
+import { buildCallConversationChatHistory } from '../services/callConversationRuntime';
 import { speakSpeechSynthesisPlan, stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
 import {
   playAudioUriOnce,
@@ -81,10 +82,14 @@ import {
   selectMomentFocusEvent,
 } from '../services/momentsRuntime';
 import {
-  chooseStickerForSemantic,
+  chooseCharacterStickerForReply,
   filterStickersForChat,
   normalizeStickerAssets,
 } from '../services/stickerRuntime';
+import {
+  createLocalMomentReactionComment,
+  planCharacterMomentReactions,
+} from '../services/momentReactionRuntime';
 import { deletePersistedMediaFile } from '../services/localMediaRepository';
 import {
   normalizeCharacterMediaAssets,
@@ -491,6 +496,7 @@ const transitionOutgoingTurn = (
 
 let proactiveHeartbeatInFlight = false;
 let proactiveMomentHeartbeatInFlight = false;
+const activeMomentReactionIds = new Set<string>();
 
 export interface SendChatMessageOptions {
   textOverride?: string;
@@ -713,6 +719,7 @@ export interface NanaStore {
   setCharacterAutonomousImageSharingEnabled: (characterId: string, enabled: boolean) => void;
   addCharacterMediaAsset: (characterId: string, uri: string) => void;
   publishMoment: (draft: { text: string; images: string[] }) => string | null;
+  runCharacterMomentReactions: (momentId: string) => Promise<void>;
   toggleMomentLike: (momentId: string) => void;
   addMomentComment: (momentId: string, text: string, replyToCommentId?: string) => Promise<void>;
   addStickers: (stickers: StickerAsset[]) => void;
@@ -1575,7 +1582,125 @@ export const useNanaStore = create<NanaStore>()(
           momentText: '',
           momentImageUrl: '',
         }));
+        setTimeout(() => {
+          void get().runCharacterMomentReactions(momentId);
+        }, 1_200);
         return momentId;
+      },
+
+      runCharacterMomentReactions: async (momentId) => {
+        if (activeMomentReactionIds.has(momentId)) return;
+        const initial = get();
+        const moment = initial.momentsList.find(item => item.id === momentId);
+        if (!moment || (moment.authorId !== 'me' && moment.authorId !== 'user')) return;
+        const plans = planCharacterMomentReactions({
+          moment,
+          characters: initial.characters,
+          friends: initial.friends,
+          blockedUsers: initial.blockedUsers,
+        });
+        if (plans.length === 0) return;
+
+        activeMomentReactionIds.add(momentId);
+        try {
+          for (const plan of plans) {
+            const liveBeforeGeneration = get();
+            const liveMoment = liveBeforeGeneration.momentsList.find(item => item.id === momentId);
+            if (
+              !liveMoment
+              || (liveMoment.authorId !== 'me' && liveMoment.authorId !== 'user')
+              || !liveBeforeGeneration.friends.includes(plan.character.id)
+              || liveBeforeGeneration.blockedUsers.includes(plan.character.id)
+            ) continue;
+
+            let commentText = '';
+            if (plan.shouldComment) {
+              commentText = createLocalMomentReactionComment({
+                character: plan.character,
+                momentText: liveMoment.text,
+                language: liveBeforeGeneration.themeConfig.language,
+              });
+              if (liveBeforeGeneration.apiKey.trim()) {
+                try {
+                  commentText = await generateMomentComment({
+                    character: plan.character,
+                    userName: liveBeforeGeneration.myName,
+                    momentText: liveMoment.text,
+                    language: liveBeforeGeneration.themeConfig.language,
+                    apiUrl: liveBeforeGeneration.apiUrl,
+                    apiKey: liveBeforeGeneration.apiKey,
+                    selectedModel: liveBeforeGeneration.selectedModel,
+                  });
+                } catch (error) {
+                  console.warn('Moment reaction generation failed; using local persona fallback.', error);
+                }
+              }
+            }
+
+            const reactedAt = Date.now();
+            set(state => {
+              const currentMoment = state.momentsList.find(item => item.id === momentId);
+              if (
+                !currentMoment
+                || (currentMoment.authorId !== 'me' && currentMoment.authorId !== 'user')
+                || !state.friends.includes(plan.character.id)
+                || state.blockedUsers.includes(plan.character.id)
+              ) return {};
+              const alreadyLiked = currentMoment.likes?.some(
+                like => like.authorId === plan.character.id,
+              );
+              const alreadyCommented = currentMoment.comments?.some(
+                comment => comment.authorId === plan.character.id,
+              );
+              const shouldAddComment = plan.shouldComment
+                && !alreadyCommented
+                && !!commentText.trim();
+              const nextMoment: Moment = {
+                ...currentMoment,
+                likes: plan.shouldLike && !alreadyLiked
+                  ? [...(currentMoment.likes || []), {
+                      authorId: plan.character.id,
+                      authorName: plan.character.name,
+                      avatar: plan.character.avatar,
+                      timestamp: reactedAt,
+                    }]
+                  : currentMoment.likes,
+                comments: shouldAddComment
+                  ? [...(currentMoment.comments || []), {
+                      id: `moment-comment:${plan.character.id}:${reactedAt}:${Math.random().toString(36).slice(2, 8)}`,
+                      authorId: plan.character.id,
+                      authorName: plan.character.name,
+                      avatar: plan.character.avatar,
+                      text: commentText.trim().slice(0, 500),
+                      timestamp: reactedAt,
+                      replyToAuthorName: state.myName || runtimeCopyFor(state.themeConfig.language).fallbackUser,
+                    }]
+                  : currentMoment.comments,
+              };
+              return {
+                momentsList: state.momentsList.map(item => (
+                  item.id === momentId ? nextMoment : item
+                )),
+                ...(shouldAddComment ? {
+                  relationshipTraces: upsertRelationshipTrace(state.relationshipTraces, createRelationshipTrace({
+                    characterId: plan.character.id,
+                    source: 'moment',
+                    sourceEventId: `${momentId}:reaction:${plan.character.id}`,
+                    title: runtimeCopyFor(state.themeConfig.language).language === 'zh'
+                      ? '朋友圈回应'
+                      : 'Moment response',
+                    summary: `${plan.character.name}: ${commentText.trim()}`,
+                    occurredAt: reactedAt,
+                    recallWeight: 0.5,
+                    state: 'digested',
+                  })),
+                } : {}),
+              };
+            });
+          }
+        } finally {
+          activeMomentReactionIds.delete(momentId);
+        }
       },
 
       toggleMomentLike: (momentId) => {
@@ -2815,9 +2940,13 @@ export const useNanaStore = create<NanaStore>()(
                 policy: { enabled: true },
               }).asset
             : null;
-          const selectedCharacterSticker = type === 'sticker'
-            ? chooseStickerForSemantic(state.stickers, normalizedReplyText, chatId)
-            : null;
+          const selectedCharacterSticker = chooseCharacterStickerForReply({
+            stickers: state.stickers,
+            replyText: normalizedReplyText,
+            characterId: chatId,
+            seed: `${sourceMessageId}:${requestId}`,
+            force: type === 'sticker',
+          });
 
           let didCommitAll = false;
           for (const [messageIndex, messageText] of deliveryMessages.entries()) {
@@ -3774,20 +3903,26 @@ export const useNanaStore = create<NanaStore>()(
             } : {}),
           }));
 
-          if (!isCurrentCallSession(get().callOverlay)) return;
+          const currentCallOverlay = get().callOverlay;
+          if (!isCurrentCallSession(currentCallOverlay)) return;
 
           if (!state.apiKey || !activeChatId) {
             throw new Error(copy.apiKeyRequiredSystem);
           }
 
           const activePreset = state.onlinePresets.find(p => p.id === state.activeOnlinePresetId) || DEFAULT_ONLINE_PRESET;
+          const callConversationHistory = buildCallConversationChatHistory({
+            chatHistory: state.chatHistory[activeChatId] || [],
+            transcript: currentCallOverlay.transcript,
+            currentUserText: transcriptCapture.transcript,
+          });
           const { text: replyText, continuityPatch } = await generateReply({
             userText: transcriptCapture.transcript,
             userName: state.myName,
             userDesc: state.myDesc,
             activeChar,
             activePreset,
-            chatHistory: state.chatHistory[activeChatId] || [],
+            chatHistory: callConversationHistory,
             worldBookEntries: state.worldBookEntries,
             relationshipTraces: state.relationshipTraces,
             conversationContinuity: state.conversationContinuityByCharacter[activeChatId],

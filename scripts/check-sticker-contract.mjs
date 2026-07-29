@@ -34,6 +34,7 @@ const sandbox = vm.createContext({
 vm.runInContext(compiled.outputText, sandbox, { filename: runtimePath });
 
 const {
+  chooseCharacterStickerForReply,
   chooseStickerForSemantic,
   filterStickersForChat,
   normalizeStickerAsset,
@@ -118,6 +119,29 @@ expect(
   'semantic selection must fail closed when there is no tag or name match',
 );
 
+const ordinaryReplyChoice = Array.from({ length: 100 }, (_, index) => (
+  chooseCharacterStickerForReply({
+    stickers: [globalHappy, lunaComfort, kaiComfort],
+    replyText: globalHappy.name,
+    characterId: 'luna-id',
+    seed: `ordinary:${index}`,
+  })
+)).find(Boolean);
+expect(
+  ordinaryReplyChoice?.id === 'global-happy',
+  'ordinary text replies must be able to select a semantically matching sticker',
+);
+expect(
+  chooseCharacterStickerForReply({
+    stickers: [globalHappy, lunaComfort],
+    replyText: lunaComfort.name,
+    characterId: 'luna-id',
+    seed: 'forced-sticker-reply',
+    force: true,
+  })?.id === 'luna-comfort',
+  'replying to a user sticker must keep deterministic semantic sticker selection',
+);
+
 const panelSource = readFileSync(resolve(root, 'src/components/StickerPanel.tsx'), 'utf8');
 const managerSource = readFileSync(resolve(root, 'src/components/StickerManagerView.tsx'), 'utf8');
 const editorSource = readFileSync(resolve(root, 'src/components/StickerPackEditorOverlay.tsx'), 'utf8');
@@ -137,13 +161,22 @@ const meSource = readFileSync(resolve(root, 'src/components/MeTab.tsx'), 'utf8')
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
 expect(rootSource.includes("weChatPage === 'stickers'"), 'WeChat must render the sticker manager page');
 expect(rootSource.includes('pickStickersFromLibrary'), 'sticker manager must import durable multi-select assets');
+expect(rootSource.includes("scope === 'relationship'"), 'sticker import must pass an explicit relationship or global pending intent');
+expect(rootSource.includes('discardPickedStickers'), 'failed sticker imports must clean promoted files');
 expect(inputSource.includes('onSelectSticker'), 'chat emoji surface must expose sticker selection');
 expect(inputSource.includes('void sendSticker(sticker.id)'), 'chat sticker selection must send a real sticker message');
 expect(profileSource.includes('stickerManagerCharacterId: char.id'), 'character profile must open its relationship sticker pack');
 expect(meSource.includes("weChatPage: 'stickers'"), 'Me tab must open the global sticker manager');
 expect(storeSource.includes("type === 'sticker'"), 'chat store must persist and generate replies for sticker messages');
+expect(
+  storeSource.includes('chooseCharacterStickerForReply({'),
+  'character sticker use must be driven by reply semantics instead of only the user message type',
+);
 expect(editorSource.includes('tags: parsedTags(tagText)'), 'editor must save semantic tags');
 expect(editorSource.includes('onRequestReplace'), 'editor must delegate media replacement through a callback');
+const layoutSource = readFileSync(resolve(root, 'src/app/_layout.tsx'), 'utf8');
+expect(layoutSource.includes("intent.kind === 'sticker-import'"), 'startup recovery must route pending sticker imports back to the manager');
+expect(layoutSource.includes('createStickerAssetsFromPickerResult'), 'startup recovery must commit promoted sticker assets through the existing store action');
 
 if (errors.length > 0) {
   console.error('Sticker contract check failed:');

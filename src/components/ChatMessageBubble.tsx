@@ -387,11 +387,10 @@ export function ChatMessageBubble({
   const { t } = useApp();
   const { width } = useWindowDimensions();
   const selectMode = useNanaStore(state => state.selectMode);
-  const selectedMsgIds = useNanaStore(state => state.selectedMsgIds);
+  const isSelected = useNanaStore(state => state.selectedMsgIds.includes(msg.id));
   const neumorphic = useNanaStore(state => state.themeConfig.chromeStyle === 'neumorphic-v1');
   const payment = useNanaStore(state => msg.paymentId ? state.paymentsById[msg.paymentId] : undefined) || legacyPayment(msg);
   const [paymentDetailsVisible, setPaymentDetailsVisible] = useState(false);
-  const isSelected = selectedMsgIds.includes(msg.id);
   const availableWidth = Math.max(250, Math.min(width, 390) - 32);
 
   const toggleSelect = useCallback(() => {

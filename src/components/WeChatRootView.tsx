@@ -12,7 +12,10 @@ import { AddFriendOverlay } from './AddFriendOverlay';
 import { ComposeMomentOverlay } from './ComposeMomentOverlay';
 import { PaymentModal } from './PaymentModal';
 import { CallOverlay } from './CallOverlay';
-import { pickStickersFromLibrary } from '../services/nativeImagePickerRuntime';
+import {
+  discardPickedStickers,
+  pickStickersFromLibrary,
+} from '../services/nativeImagePickerRuntime';
 import type { StickerAsset, StickerScope } from '../types';
 
 export function WeChatRootView() {
@@ -36,9 +39,15 @@ export function WeChatRootView() {
   const removeSticker = useNanaStore(s => s.removeSticker);
 
   const requestAddStickers = async (scope: StickerScope, characterId?: string) => {
-    const result = await pickStickersFromLibrary();
+    if (scope === 'relationship' && !characterId) return;
+    const result = await pickStickersFromLibrary(
+      scope === 'relationship'
+        ? { scope, characterId: characterId! }
+        : { scope },
+    );
     if (result.canceled) return;
     if (result.errorMessage) {
+      discardPickedStickers(result.assets);
       useNanaStore.setState({
         islandNotification: {
           title: '表情包',
@@ -61,7 +70,19 @@ export function WeChatRootView() {
       ...(scope === 'relationship' && characterId ? { characterId } : {}),
       createdAt: createdAt + index,
     }));
-    addStickers(next);
+    try {
+      addStickers(next);
+    } catch (error) {
+      discardPickedStickers(result.assets);
+      useNanaStore.setState({
+        islandNotification: {
+          title: t.stickers,
+          desc: error instanceof Error ? error.message : 'Sticker import failed',
+          status: 'error',
+        },
+      });
+      return;
+    }
     useNanaStore.setState({
       islandNotification: {
         title: '表情包',

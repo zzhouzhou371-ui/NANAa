@@ -29,6 +29,33 @@ const sandbox = vm.createContext({
 });
 vm.runInContext(compiled.outputText, sandbox, { filename: runtimePath });
 
+const reactionRuntimePath = resolve(root, 'src/services/momentReactionRuntime.ts');
+const reactionRuntimeSource = readFileSync(reactionRuntimePath, 'utf8');
+const reactionRuntimeCompiled = ts.transpileModule(reactionRuntimeSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2020,
+    esModuleInterop: true,
+  },
+  fileName: reactionRuntimePath,
+});
+const reactionModule = { exports: {} };
+const reactionSandbox = vm.createContext({
+  exports: reactionModule.exports,
+  module: reactionModule,
+  require: id => {
+    throw new Error(`Unexpected moment reaction runtime dependency: ${id}`);
+  },
+  Array,
+  Math,
+  Object,
+  Set,
+  String,
+});
+vm.runInContext(reactionRuntimeCompiled.outputText, reactionSandbox, {
+  filename: reactionRuntimePath,
+});
+
 const {
   PROACTIVE_MOMENT_GLOBAL_COOLDOWN_MS,
   PROACTIVE_MOMENT_NORMAL_MIN_MS,
@@ -42,6 +69,10 @@ const {
   selectDueMomentCandidate,
   selectMomentFocusEvent,
 } = module.exports;
+const {
+  createLocalMomentReactionComment,
+  planCharacterMomentReactions,
+} = reactionModule.exports;
 
 const errors = [];
 const expect = (condition, message) => {
@@ -189,6 +220,49 @@ expect(
   'a real event fallback must retain its deduplication identity',
 );
 
+const userMoment = {
+  id: 'moment:user:test',
+  authorId: 'me',
+  authorName: 'User',
+  avatar: 'U',
+  text: 'I finished something important today.',
+  images: [],
+  timestamp: now,
+  likes: [],
+  comments: [],
+  generationSource: 'user',
+};
+const reactionPlans = planCharacterMomentReactions({
+  moment: userMoment,
+  characters,
+  friends: ['normal-id', 'occasional-id', 'blocked-id'],
+  blockedUsers: ['blocked-id'],
+});
+expect(
+  reactionPlans.length === 2
+    && reactionPlans[0].shouldComment
+    && reactionPlans.every(plan => plan.shouldLike)
+    && reactionPlans.every(plan => plan.character.id !== 'blocked-id'),
+  'a user moment must select at most two eligible friend reactions with one bounded comment',
+);
+expect(
+  planCharacterMomentReactions({
+    moment: { ...userMoment, authorId: 'normal-id' },
+    characters,
+    friends: characters.map(character => character.id),
+    blockedUsers: [],
+  }).length === 0,
+  'character-authored moments must not trigger the user-post reaction loop',
+);
+expect(
+  createLocalMomentReactionComment({
+    character: characters[0],
+    momentText: userMoment.text,
+    language: 'en-US',
+  }).trim().length > 0,
+  'character moment reactions need a local persona-safe fallback',
+);
+
 const momentsViewSource = readFileSync(resolve(root, 'src/components/MomentsView.tsx'), 'utf8');
 expect(
   !momentsViewSource.includes('<Plus ')
@@ -203,6 +277,8 @@ expect(!momentsViewSource.includes('/^https?'), 'Moments must not reject local, 
 
 const composerSource = readFileSync(resolve(root, 'src/components/ComposeMomentOverlay.tsx'), 'utf8');
 expect(composerSource.includes('onPublish'), 'composer must accept an integration-owned publish action');
+expect(composerSource.includes('pickMomentPhotoFromLibrary({ text: momentText })'), 'composer must persist its text alongside the Android picker intent');
+expect(composerSource.includes('discardPickedPhoto'), 'composer cancellation and photo removal must clean promoted draft media');
 expect(!composerSource.includes('createRelationshipTrace'), 'publishing must not write a trace to every friend');
 expect(!composerSource.includes('upsertRelationshipTrace'), 'composer must not own relationship memory fan-out');
 expect(composerSource.includes('NeumorphicSurface'), 'composer must use the current neumorphic material');
@@ -214,7 +290,13 @@ expect(storeSource.includes('runProactiveMomentsHeartbeat'), 'store must expose 
 expect(storeSource.includes('generateMomentPost'), 'due character moments must use the isolated model service when configured');
 expect(storeSource.includes('toggleMomentLike'), 'moment likes must be an atomic store action');
 expect(storeSource.includes('addMomentComment'), 'moment comments and character replies must be store actions');
+expect(
+  storeSource.includes('runCharacterMomentReactions')
+    && storeSource.includes('planCharacterMomentReactions'),
+  'publishing a user moment must enter the character reaction loop',
+);
 expect(layoutSource.includes('runProactiveMomentsHeartbeat'), 'foreground lifecycle must trigger autonomous moments');
+expect(layoutSource.includes("intent.kind === 'moment-photo'"), 'startup recovery must reopen a pending moment photo draft');
 expect(profileSource.includes('setCharacterProactiveMomentsMode'), 'character profile must expose autonomous moments policy');
 
 if (errors.length > 0) {

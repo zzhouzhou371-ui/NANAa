@@ -19,7 +19,9 @@ import {
   cleanupReplacedWallpaper,
   cleanupReplacedAvatar,
   createCharacterAvatarStatePatch,
+  createStickerAssetsFromPickerResult,
   discardPickedAvatar,
+  discardPickedStickers,
   recoverPendingImagePickerSelection,
 } from '../services/nativeImagePickerRuntime';
 import { pruneUnreferencedAvatarFiles } from '../services/localMediaRepository';
@@ -83,14 +85,72 @@ export default function RootLayout() {
       const recoveredSelection = await recoverPendingImagePickerSelection();
       if (recoveredSelection) {
         const { intent, result } = recoveredSelection;
-        const recoveredUri = result.phase === 'ready' ? result.localUri : undefined;
+        const stickerResult = 'purpose' in result && result.purpose === 'sticker'
+          ? result
+          : null;
+        const captureResult = 'phase' in result ? result : null;
+        const recoveredUri = captureResult?.phase === 'ready'
+          ? captureResult.localUri
+          : undefined;
 
-        if (intent.kind === 'chat-photo' && recoveredUri) {
+        if (intent.kind === 'sticker-import' && stickerResult) {
+          const relationshipExists = intent.scope === 'global'
+            || useNanaStore.getState().characters.some(
+              character => character.id === intent.characterId,
+            );
+          useNanaStore.setState({
+            activeApp: 'wechat',
+            weChatPage: 'stickers',
+            stickerManagerCharacterId: intent.scope === 'relationship' && relationshipExists
+              ? intent.characterId
+              : null,
+          });
+          if (!relationshipExists) {
+            discardPickedStickers(stickerResult.assets);
+            const recoveryTranslations = useNanaStore.getState().themeConfig.language === 'zh'
+              ? i18n.zh
+              : i18n.en;
+            useNanaStore.setState({
+              islandNotification: {
+                title: recoveryTranslations.stickers,
+                desc: recoveryTranslations.chooseStickerRelationship,
+                status: 'error',
+              },
+            });
+          } else if (!stickerResult.canceled && !stickerResult.errorMessage) {
+            const stickers = createStickerAssetsFromPickerResult(stickerResult, intent);
+            try {
+              useNanaStore.getState().addStickers(stickers);
+              const recoveryLanguage = useNanaStore.getState().themeConfig.language;
+              const recoveryTranslations = recoveryLanguage === 'zh'
+                ? i18n.zh
+                : i18n.en;
+              useNanaStore.setState({
+                islandNotification: {
+                  title: recoveryTranslations.stickers,
+                  desc: recoveryLanguage === 'zh'
+                    ? `已恢复导入 ${stickers.length} 个表情`
+                    : `Recovered ${stickers.length} imported stickers`,
+                  status: stickers.length > 0 ? 'success' : 'error',
+                },
+              });
+            } catch (error) {
+              discardPickedStickers(stickerResult.assets);
+              useNanaStore.setState({
+                islandNotification: {
+                  title: useNanaStore.getState().themeConfig.language === 'zh' ? '表情' : 'Stickers',
+                  desc: error instanceof Error ? error.message : 'Sticker import failed',
+                  status: 'error',
+                },
+              });
+            }
+          }
+        } else if (intent.kind === 'chat-photo' && recoveredUri) {
           await useNanaStore.getState().sendChatMessage(
             'image',
             undefined,
             'Recovered photo',
-            result,
+            captureResult!,
             { targetChatId: intent.chatId },
           );
         } else if (intent.kind === 'theme-wallpaper') {
@@ -117,6 +177,14 @@ export default function RootLayout() {
           useNanaStore.setState({
             activeApp: 'wechat',
             weChatPage: 'moments',
+          });
+        } else if (intent.kind === 'moment-photo') {
+          useNanaStore.setState({
+            activeApp: 'wechat',
+            weChatPage: 'moments',
+            showComposeMoment: true,
+            momentText: intent.draft.text,
+            momentImageUrl: recoveredUri || '',
           });
         } else if (intent.kind === 'character-avatar') {
           const state = useNanaStore.getState();
@@ -150,7 +218,17 @@ export default function RootLayout() {
           }
         }
 
-        if (result.phase === 'failed') {
+        if (stickerResult?.errorMessage) {
+          const recoveryTranslations = useNanaStore.getState().themeConfig.language === 'zh' ? i18n.zh : i18n.en;
+          discardPickedStickers(stickerResult.assets);
+          useNanaStore.setState({
+            islandNotification: {
+              title: recoveryTranslations.stickers,
+              desc: stickerResult.errorMessage,
+              status: 'error',
+            },
+          });
+        } else if (captureResult?.phase === 'failed') {
           const recoveryTranslations = useNanaStore.getState().themeConfig.language === 'zh' ? i18n.zh : i18n.en;
           useNanaStore.setState({
             islandNotification: {
@@ -158,11 +236,15 @@ export default function RootLayout() {
                 ? recoveryTranslations.wallpaper
                 : intent.kind === 'moments-cover'
                   ? recoveryTranslations.moments
+                  : intent.kind === 'moment-photo'
+                    ? recoveryTranslations.moment
                 : recoveryTranslations.photoLibrary,
               desc: intent.kind === 'theme-wallpaper'
                 ? recoveryTranslations.wallpaperPickerError
                 : intent.kind === 'moments-cover'
                   ? recoveryTranslations.photoLibrary
+                  : intent.kind === 'moment-photo'
+                    ? recoveryTranslations.photoAttachFailed
                 : recoveryTranslations.portraitPickerError,
               status: 'error',
             },

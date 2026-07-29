@@ -26,6 +26,8 @@
     "test:voice-gesture": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-voice-gesture-contract.mjs",
     "test:call-audio-route": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-call-audio-route-contract.mjs",
     "test:call-voice-activity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-call-voice-activity-contract.mjs",
+    "test:call-conversation": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-call-conversation-contract.mjs",
+    "test:foreground-performance": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-foreground-performance-contract.mjs",
     "test:payment": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-payment-contract.mjs",
     "test:trace": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-relationship-trace-contract.mjs",
     "test:memory-context": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-node.ps1 ./scripts/check-memory-context-contract.mjs",

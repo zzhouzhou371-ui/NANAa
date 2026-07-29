@@ -3,7 +3,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { File } from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { CallLog, CallOverlayState, Character, ChatHistory, Moment } from '../types';
+import type {
+  CallLog,
+  CallOverlayState,
+  Character,
+  ChatHistory,
+  Moment,
+  StickerAsset,
+} from '../types';
 import {
   createCameraCaptureResultFromPicture,
   type MediaCaptureResult,
@@ -39,13 +46,25 @@ export interface UserAvatarDraftSnapshot {
   tempMyDesc: string;
 }
 
+export interface MomentPhotoDraftSnapshot {
+  text: string;
+}
+
+export type StickerImportRequest =
+  | { scope: 'global' }
+  | { scope: 'relationship'; characterId: string };
+
 export type PendingImagePickerIntent =
   | { kind: 'chat-photo'; chatId: string }
   | { kind: 'character-avatar'; characterId: string }
   | { kind: 'character-avatar-draft'; draft: CharacterAvatarDraftSnapshot }
   | { kind: 'user-avatar-draft'; draft: UserAvatarDraftSnapshot }
   | { kind: 'theme-wallpaper' }
-  | { kind: 'moments-cover' };
+  | { kind: 'moments-cover' }
+  | { kind: 'moment-photo'; draft: MomentPhotoDraftSnapshot }
+  | ({ kind: 'sticker-import' } & StickerImportRequest);
+
+export type StickerImportIntent = Extract<PendingImagePickerIntent, { kind: 'sticker-import' }>;
 
 export interface PhotoPickerResult extends MediaCaptureResult {
   canceled?: boolean;
@@ -59,7 +78,7 @@ export interface AvatarPickerResult extends MediaCaptureResult {
 
 export interface RecoveredImagePickerSelection {
   intent: PendingImagePickerIntent;
-  result: PhotoPickerResult | AvatarPickerResult;
+  result: PhotoPickerResult | AvatarPickerResult | StickerPickerResult;
 }
 
 export interface PickedStickerAsset {
@@ -73,6 +92,7 @@ export interface PickedStickerAsset {
 }
 
 export interface StickerPickerResult {
+  purpose: 'sticker';
   canceled: boolean;
   assets: PickedStickerAsset[];
   rejectedCount: number;
@@ -261,6 +281,17 @@ export const pickPhotoFromLibrary = () => launchPicker('library');
 
 export const takePhotoWithSystemCamera = () => launchPicker('camera');
 
+export const pickMomentPhotoFromLibrary = async (
+  draft: MomentPhotoDraftSnapshot,
+): Promise<PhotoPickerResult> => {
+  await rememberPendingImagePickerIntent({ kind: 'moment-photo', draft });
+  try {
+    return await launchPicker('library');
+  } finally {
+    await clearPendingImagePickerIntent();
+  }
+};
+
 const isAnimatedStickerAsset = (asset: ImagePicker.ImagePickerAsset) => {
   const mimeType = asset.mimeType?.toLowerCase() || '';
   const fileName = asset.fileName?.toLowerCase() || '';
@@ -275,7 +306,62 @@ const isAnimatedStickerAsset = (asset: ImagePicker.ImagePickerAsset) => {
  * first frame. Sticker files are promoted into Nana's durable document area
  * before the result is returned to persisted state.
  */
-export const pickStickersFromLibrary = async (): Promise<StickerPickerResult> => {
+const canceledStickerResult = (): StickerPickerResult => ({
+  purpose: 'sticker',
+  canceled: true,
+  assets: [],
+  rejectedCount: 0,
+});
+
+const failedStickerResult = (error: unknown): StickerPickerResult => ({
+  purpose: 'sticker',
+  canceled: false,
+  assets: [],
+  rejectedCount: 0,
+  errorMessage: error instanceof Error ? error.message : String(error || 'Sticker selection failed'),
+});
+
+const normalizeStickerPickerAssets = (
+  selectedAssets: ImagePicker.ImagePickerAsset[],
+): StickerPickerResult => {
+  let rejectedCount = 0;
+  const assets = selectedAssets.flatMap((asset): PickedStickerAsset[] => {
+    if (asset.type && asset.type !== 'image') {
+      rejectedCount += 1;
+      return [];
+    }
+    if (typeof asset.fileSize === 'number' && asset.fileSize > 8 * 1024 * 1024) {
+      rejectedCount += 1;
+      return [];
+    }
+    try {
+      const extension = safeExtension(asset);
+      return [{
+        uri: finalizeLocalMediaFile(asset.uri, 'stickers', extension),
+        name: asset.fileName?.replace(/\.[^.]+$/, '').trim() || 'Sticker',
+        mimeType: asset.mimeType || `image/${extension}`,
+        animated: isAnimatedStickerAsset(asset),
+        width: asset.width,
+        height: asset.height,
+        fileSize: asset.fileSize,
+      }];
+    } catch {
+      rejectedCount += 1;
+      return [];
+    }
+  });
+  return {
+    purpose: 'sticker',
+    canceled: false,
+    assets,
+    rejectedCount,
+  };
+};
+
+export const pickStickersFromLibrary = async (
+  intent: StickerImportRequest,
+): Promise<StickerPickerResult> => {
+  await rememberPendingImagePickerIntent({ kind: 'sticker-import', ...intent });
   try {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -288,44 +374,44 @@ export const pickStickersFromLibrary = async (): Promise<StickerPickerResult> =>
       preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
       shouldDownloadFromNetwork: true,
     });
-    if (result.canceled) return { canceled: true, assets: [], rejectedCount: 0 };
-
-    let rejectedCount = 0;
-    const assets = result.assets.flatMap((asset): PickedStickerAsset[] => {
-      if (asset.type && asset.type !== 'image') {
-        rejectedCount += 1;
-        return [];
-      }
-      if (typeof asset.fileSize === 'number' && asset.fileSize > 8 * 1024 * 1024) {
-        rejectedCount += 1;
-        return [];
-      }
-      try {
-        const extension = safeExtension(asset);
-        return [{
-          uri: finalizeLocalMediaFile(asset.uri, 'stickers', extension),
-          name: asset.fileName?.replace(/\.[^.]+$/, '').trim() || 'Sticker',
-          mimeType: asset.mimeType || `image/${extension}`,
-          animated: isAnimatedStickerAsset(asset),
-          width: asset.width,
-          height: asset.height,
-          fileSize: asset.fileSize,
-        }];
-      } catch {
-        rejectedCount += 1;
-        return [];
-      }
-    });
-    return { canceled: false, assets, rejectedCount };
+    if (result.canceled) return canceledStickerResult();
+    return normalizeStickerPickerAssets(result.assets);
   } catch (error) {
-    return {
-      canceled: false,
-      assets: [],
-      rejectedCount: 0,
-      errorMessage: error instanceof Error ? error.message : 'Sticker selection failed',
-    };
+    return failedStickerResult(error);
+  } finally {
+    await clearPendingImagePickerIntent();
   }
 };
+
+export const createStickerAssetsFromPickerResult = (
+  result: StickerPickerResult,
+  intent: StickerImportRequest,
+  createdAt = Date.now(),
+): StickerAsset[] => result.assets.map((asset, index) => ({
+  schemaVersion: 1,
+  id: `sticker:${createdAt}:${index}:${Math.random().toString(36).slice(2, 8)}`,
+  uri: asset.uri,
+  name: asset.name || `Sticker ${index + 1}`,
+  tags: [],
+  mimeType: asset.mimeType,
+  animated: asset.animated,
+  scope: intent.scope,
+  ...(intent.scope === 'relationship' && intent.characterId
+    ? { characterId: intent.characterId }
+    : {}),
+  createdAt: createdAt + index,
+}));
+
+export const discardPickedPhoto = (uri?: string | null) => (
+  deletePersistedMediaFile(uri, 'images') || discardTemporaryMediaFile(uri)
+);
+
+export const discardPickedStickers = (assets: readonly PickedStickerAsset[]) => (
+  assets.reduce(
+    (deleted, asset) => (deletePersistedMediaFile(asset.uri, 'stickers') ? deleted + 1 : deleted),
+    0,
+  )
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -337,6 +423,15 @@ const isPendingImagePickerIntent = (value: unknown): value is PendingImagePicker
   if (value.kind === 'character-avatar') return typeof value.characterId === 'string' && !!value.characterId;
   if (value.kind === 'character-avatar-draft' || value.kind === 'user-avatar-draft') {
     return isRecord(value.draft);
+  }
+  if (value.kind === 'moment-photo') {
+    return isRecord(value.draft) && typeof value.draft.text === 'string';
+  }
+  if (value.kind === 'sticker-import') {
+    if (value.scope === 'global') return true;
+    return value.scope === 'relationship'
+      && typeof value.characterId === 'string'
+      && !!value.characterId;
   }
   if (value.kind === 'theme-wallpaper' || value.kind === 'moments-cover') return true;
   return false;
@@ -526,9 +621,12 @@ export const recoverPendingImagePickerSelection = async (): Promise<RecoveredIma
     if ('code' in pending) {
       return {
         intent,
-        result: intent.kind === 'chat-photo'
+        result: intent.kind === 'sticker-import'
+          ? failedStickerResult(pending.message || pending.code)
+          : intent.kind === 'chat-photo'
           || intent.kind === 'theme-wallpaper'
           || intent.kind === 'moments-cover'
+          || intent.kind === 'moment-photo'
           ? failedResult('library', pending.message || pending.code)
           : failedAvatarResult(pending.message || pending.code),
       };
@@ -536,29 +634,39 @@ export const recoverPendingImagePickerSelection = async (): Promise<RecoveredIma
     if (pending.canceled || !pending.assets[0]) {
       return {
         intent,
-        result: intent.kind === 'chat-photo'
+        result: intent.kind === 'sticker-import'
+          ? canceledStickerResult()
+          : intent.kind === 'chat-photo'
           || intent.kind === 'theme-wallpaper'
           || intent.kind === 'moments-cover'
+          || intent.kind === 'moment-photo'
           ? canceledResult('library')
           : canceledAvatarResult(),
       };
     }
     return {
       intent,
-      result: intent.kind === 'chat-photo'
+      result: intent.kind === 'sticker-import'
+        ? normalizeStickerPickerAssets(pending.assets)
+        : intent.kind === 'chat-photo'
         ? normalizeAsset('library', pending.assets[0])
         : intent.kind === 'theme-wallpaper'
           ? normalizeAsset('library', pending.assets[0])
           : intent.kind === 'moments-cover'
             ? normalizeAsset('library', pending.assets[0])
+            : intent.kind === 'moment-photo'
+              ? normalizeAsset('library', pending.assets[0])
           : await normalizeAvatarAsset(pending.assets[0]),
     };
   } catch (error) {
     return {
       intent,
-      result: intent.kind === 'chat-photo'
+      result: intent.kind === 'sticker-import'
+        ? failedStickerResult(error)
+        : intent.kind === 'chat-photo'
         || intent.kind === 'theme-wallpaper'
         || intent.kind === 'moments-cover'
+        || intent.kind === 'moment-photo'
         ? failedResult('library', error)
         : failedAvatarResult(error),
     };

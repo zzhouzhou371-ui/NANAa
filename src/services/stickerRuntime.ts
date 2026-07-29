@@ -242,3 +242,33 @@ export function chooseStickerForSemantic(
 ) {
   return rankStickersForSemantic(stickers, query, characterId)[0]?.sticker ?? null;
 }
+
+const stableStickerHash = (value: string) => {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) || 0;
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+};
+
+export function chooseCharacterStickerForReply(input: {
+  stickers: readonly StickerAsset[];
+  replyText: string;
+  characterId: string;
+  seed: string;
+  force?: boolean;
+}) {
+  const best = rankStickersForSemantic(
+    input.stickers,
+    input.replyText,
+    input.characterId,
+  )[0];
+  if (!best || best.score < 3) return null;
+  if (input.force) return best.sticker;
+
+  const sendChance = best.score >= 7 ? 55 : 28;
+  return stableStickerHash(`${input.characterId}:${input.seed}:${best.sticker.id}`) % 100 < sendChance
+    ? best.sticker
+    : null;
+}

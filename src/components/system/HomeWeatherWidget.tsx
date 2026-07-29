@@ -52,19 +52,28 @@ function useReducedMotionPreference() {
   return reducedMotion;
 }
 
-function RainDrops({ color, reducedMotion }: { color: string; reducedMotion: boolean }) {
+function RainDrops({
+  active,
+  color,
+  reducedMotion,
+}: {
+  active: boolean;
+  color: string;
+  reducedMotion: boolean;
+}) {
+  const motionDisabled = reducedMotion || !active;
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 10, right: 10, bottom: 3, height: 20 }}>
       {[0, 1, 2].map(index => (
         <MotiView
           key={index}
           from={{ opacity: 0.22, translateY: -3 }}
-          animate={{ opacity: 0.9, translateY: reducedMotion ? 0 : 8 }}
+          animate={{ opacity: 0.9, translateY: motionDisabled ? 0 : 8 }}
           transition={{
             type: 'timing',
-            duration: reducedMotion ? 1 : 760,
+            duration: motionDisabled ? 1 : 760,
             delay: index * 170,
-            loop: !reducedMotion,
+            loop: !motionDisabled,
           }}
           style={{
             position: 'absolute',
@@ -80,7 +89,16 @@ function RainDrops({ color, reducedMotion }: { color: string; reducedMotion: boo
   );
 }
 
-function SnowFlakes({ color, reducedMotion }: { color: string; reducedMotion: boolean }) {
+function SnowFlakes({
+  active,
+  color,
+  reducedMotion,
+}: {
+  active: boolean;
+  color: string;
+  reducedMotion: boolean;
+}) {
+  const motionDisabled = reducedMotion || !active;
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 10, right: 10, bottom: 3, height: 19 }}>
       {[0, 1, 2].map(index => (
@@ -89,14 +107,14 @@ function SnowFlakes({ color, reducedMotion }: { color: string; reducedMotion: bo
           from={{ opacity: 0.35, translateY: -3, translateX: 0 }}
           animate={{
             opacity: 0.95,
-            translateY: reducedMotion ? 0 : 8,
-            translateX: reducedMotion ? 0 : index % 2 === 0 ? 2 : -2,
+            translateY: motionDisabled ? 0 : 8,
+            translateX: motionDisabled ? 0 : index % 2 === 0 ? 2 : -2,
           }}
           transition={{
             type: 'timing',
-            duration: reducedMotion ? 1 : 1_250,
+            duration: motionDisabled ? 1 : 1_250,
             delay: index * 230,
-            loop: !reducedMotion,
+            loop: !motionDisabled,
           }}
           style={{
             position: 'absolute',
@@ -113,15 +131,18 @@ function SnowFlakes({ color, reducedMotion }: { color: string; reducedMotion: bo
 }
 
 function WeatherGlyph({
+  active,
   condition,
   isDay,
   neumorphic,
 }: {
+  active: boolean;
   condition: WeatherCondition;
   isDay: boolean;
   neumorphic: boolean;
 }) {
   const reducedMotion = useReducedMotionPreference();
+  const motionDisabled = reducedMotion || !active;
   const primary = neumorphic ? neumorphicPalette.berry : '#FFD6B8';
   const secondary = neumorphic ? '#6D6380' : 'rgba(231,238,255,0.88)';
   const rain = neumorphic ? '#6679A6' : '#A9CEFF';
@@ -132,8 +153,8 @@ function WeatherGlyph({
     return (
       <MotiView
         from={{ rotate: '0deg', scale: 0.96 }}
-        animate={{ rotate: reducedMotion ? '0deg' : '360deg', scale: 1 }}
-        transition={{ type: 'timing', duration: reducedMotion ? 1 : 18_000, loop: !reducedMotion }}
+        animate={{ rotate: motionDisabled ? '0deg' : '360deg', scale: 1 }}
+        transition={{ type: 'timing', duration: motionDisabled ? 1 : 18_000, loop: !motionDisabled }}
       >
         <Icon size={iconSize} color={primary} strokeWidth={1.65} />
       </MotiView>
@@ -145,8 +166,8 @@ function WeatherGlyph({
     return (
       <MotiView
         from={{ translateX: -2 }}
-        animate={{ translateX: reducedMotion ? 0 : 3 }}
-        transition={{ type: 'timing', duration: reducedMotion ? 1 : 2_700, loop: !reducedMotion, repeatReverse: true }}
+        animate={{ translateX: motionDisabled ? 0 : 3 }}
+        transition={{ type: 'timing', duration: motionDisabled ? 1 : 2_700, loop: !motionDisabled, repeatReverse: true }}
       >
         <Icon size={iconSize} color={primary} strokeWidth={1.65} />
       </MotiView>
@@ -158,7 +179,7 @@ function WeatherGlyph({
     return (
       <View style={{ width: 56, height: 56, alignItems: 'center', justifyContent: 'flex-start' }}>
         <Icon size={43} color={secondary} strokeWidth={1.6} />
-        <RainDrops color={rain} reducedMotion={reducedMotion} />
+        <RainDrops active={active} color={rain} reducedMotion={reducedMotion} />
       </View>
     );
   }
@@ -167,7 +188,7 @@ function WeatherGlyph({
     return (
       <View style={{ width: 56, height: 56, alignItems: 'center', justifyContent: 'flex-start' }}>
         <CloudSnow size={43} color={secondary} strokeWidth={1.6} />
-        <SnowFlakes color={rain} reducedMotion={reducedMotion} />
+        <SnowFlakes active={active} color={rain} reducedMotion={reducedMotion} />
       </View>
     );
   }
@@ -176,8 +197,8 @@ function WeatherGlyph({
     return (
       <MotiView
         from={{ opacity: 0.62, scale: 0.97 }}
-        animate={{ opacity: 1, scale: reducedMotion ? 1 : 1.04 }}
-        transition={{ type: 'timing', duration: reducedMotion ? 1 : 720, loop: !reducedMotion, repeatReverse: true }}
+        animate={{ opacity: 1, scale: motionDisabled ? 1 : 1.04 }}
+        transition={{ type: 'timing', duration: motionDisabled ? 1 : 720, loop: !motionDisabled, repeatReverse: true }}
       >
         <CloudLightning size={iconSize} color={primary} strokeWidth={1.7} />
       </MotiView>
@@ -188,8 +209,8 @@ function WeatherGlyph({
     return (
       <MotiView
         from={{ translateX: -3 }}
-        animate={{ translateX: reducedMotion ? 0 : 3 }}
-        transition={{ type: 'timing', duration: reducedMotion ? 1 : 3_200, loop: !reducedMotion, repeatReverse: true }}
+        animate={{ translateX: motionDisabled ? 0 : 3 }}
+        transition={{ type: 'timing', duration: motionDisabled ? 1 : 3_200, loop: !motionDisabled, repeatReverse: true }}
       >
         <CloudFog size={iconSize} color={secondary} strokeWidth={1.6} />
       </MotiView>
@@ -200,10 +221,12 @@ function WeatherGlyph({
 }
 
 function SculptedWeatherMedallion({
+  active,
   compact,
   condition,
   isDay,
 }: {
+  active: boolean;
   compact: boolean;
   condition: WeatherCondition;
   isDay: boolean;
@@ -255,14 +278,20 @@ function SculptedWeatherMedallion({
           style={{ width: innerSize, height: innerSize }}
           contentStyle={{ alignItems: 'center', justifyContent: 'center', overflow: 'visible' }}
         >
-          <WeatherGlyph condition={condition} isDay={isDay} neumorphic />
+          <WeatherGlyph active={active} condition={condition} isDay={isDay} neumorphic />
         </NeumorphicSurface>
       </NeumorphicSurface>
     </View>
   );
 }
 
-export function HomeWeatherWidget({ compact = false }: { compact?: boolean }) {
+export function HomeWeatherWidget({
+  active = true,
+  compact = false,
+}: {
+  active?: boolean;
+  compact?: boolean;
+}) {
   const { t } = useApp();
   const { width: viewportWidth } = useWindowDimensions();
   const language = useNanaStore(state => state.themeConfig.language);
@@ -283,13 +312,18 @@ export function HomeWeatherWidget({ compact = false }: { compact?: boolean }) {
   const largeTimeCard = timeCardWidth >= 210;
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    if (!active) return undefined;
+    const updateClock = () => {
       const nextNow = new Date();
       setNow(nextNow);
       setWeather(current => current.source === 'simulated' ? createSimulatedWeather(nextNow) : current);
+    };
+    updateClock();
+    const timer = setInterval(() => {
+      updateClock();
     }, 30_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -435,11 +469,11 @@ export function HomeWeatherWidget({ compact = false }: { compact?: boolean }) {
             style={{ width: compact ? 50 : 58, height: compact ? 50 : 58 }}
             contentStyle={{ alignItems: 'center', justifyContent: 'center' }}
           >
-            <WeatherGlyph condition={weather.condition} isDay={weather.isDay} neumorphic />
+            <WeatherGlyph active={active} condition={weather.condition} isDay={weather.isDay} neumorphic />
           </NeumorphicSurface>
         ) : (
           <View style={{ width: compact ? 56 : 64, height: compact ? 56 : 64, alignItems: 'center', justifyContent: 'center' }}>
-            <WeatherGlyph condition={weather.condition} isDay={weather.isDay} neumorphic={false} />
+            <WeatherGlyph active={active} condition={weather.condition} isDay={weather.isDay} neumorphic={false} />
           </View>
         )}
         <Text
@@ -671,6 +705,7 @@ export function HomeWeatherWidget({ compact = false }: { compact?: boolean }) {
           })}
         >
           <SculptedWeatherMedallion
+            active={active}
             compact={compact}
             condition={weather.condition}
             isDay={weather.isDay}
