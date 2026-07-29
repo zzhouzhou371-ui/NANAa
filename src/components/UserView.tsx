@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { ActivityIndicator, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { ImagePlus, Link2, RotateCcw } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
@@ -7,11 +15,11 @@ import { AnimatedPressable } from './primitives';
 import { CharacterPortrait } from './CharacterPortrait';
 import {
   cleanupReplacedAvatar,
-  createUserAvatarStatePatch,
   pickCharacterAvatarFromLibrary,
 } from '../services/nativeImagePickerRuntime';
 import { normalizeAvatarValue } from '../services/avatarValueRuntime';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
+import { normalizeUserIdentityDraft } from '../services/socialIdentityRuntime';
 
 const isImageAvatar = (avatar: string) => /^(https?:|data:|file:|content:|blob:)/.test(avatar.trim());
 const isLocalAvatar = (avatar: string) => /^(data:|file:|content:|blob:)/.test(avatar.trim());
@@ -65,6 +73,8 @@ export function UserView() {
   const tempMyAvatar = useNanaStore(s => s.tempMyAvatar);
   const tempMyDesc = useNanaStore(s => s.tempMyDesc);
   const myAvatar = useNanaStore(s => s.myAvatar);
+  const language = useNanaStore(s => s.themeConfig.language);
+  const saveUserIdentity = useNanaStore(s => s.saveUserIdentity);
   const set = useNanaStore.setState;
   const [avatarPickerBusy, setAvatarPickerBusy] = useState(false);
   const [showAvatarTextInput, setShowAvatarTextInput] = useState(false);
@@ -106,22 +116,70 @@ export function UserView() {
     setShowAvatarTextInput(true);
   };
 
-  const handleSave = () => {
-    const state = useNanaStore.getState();
+  const commitSave = (
+    normalized: ReturnType<typeof normalizeUserIdentityDraft>,
+    normalizedAvatar: string,
+  ) => {
     const previousAvatar = myAvatar;
-    const candidate = tempMyAvatar.trim() || 'U';
-    const normalizedAvatar = normalizeAvatarValue(candidate, Platform.OS === 'web' ? 'web' : 'native');
+    saveUserIdentity({
+      ...normalized,
+      avatar: normalizedAvatar,
+    });
+    set({
+      tempMyName: normalized.name,
+      tempMyAvatar: normalizedAvatar,
+      tempMyDesc: normalized.description,
+      islandNotification: {
+        title: language === 'zh' ? '用户资料' : 'User profile',
+        desc: language === 'zh' ? '姓名、头像和人设已保存' : 'Name, portrait, and persona saved',
+        status: 'success',
+      },
+    });
+    cleanupReplacedAvatar(previousAvatar, useNanaStore.getState());
+    setTimeout(() => {
+      const latest = useNanaStore.getState().islandNotification;
+      if (latest?.status === 'success') useNanaStore.setState({ islandNotification: null });
+    }, 2200);
+  };
+
+  const handleSave = () => {
+    const normalized = normalizeUserIdentityDraft(
+      {
+        name: tempMyName,
+        avatar: tempMyAvatar,
+        description: tempMyDesc,
+      },
+      {
+        name: language === 'zh' ? '用户' : 'User',
+        avatar: 'U',
+        description: language === 'zh' ? '我是一个友善的用户。' : 'I am a friendly user.',
+      },
+    );
+    const normalizedAvatar = normalizeAvatarValue(
+      normalized.avatar,
+      Platform.OS === 'web' ? 'web' : 'native',
+    );
     if (!normalizedAvatar.ok) {
       set({ islandNotification: { title: t.avatarEmojiUrl, desc: t.portraitPickerError, status: 'error' } });
       return;
     }
-    const avatarPatch = createUserAvatarStatePatch(state, normalizedAvatar.value || 'U');
-    set({
-      ...avatarPatch,
-      myName: tempMyName.trim() || 'User',
-      myDesc: tempMyDesc.trim() || 'I am a friendly user.',
-    });
-    cleanupReplacedAvatar(previousAvatar, useNanaStore.getState());
+
+    Alert.alert(
+      language === 'zh' ? '保存用户人设？' : 'Save user persona?',
+      language === 'zh'
+        ? `之后角色会以“${normalized.name}”和这份人设来认识你。`
+        : `Characters will know you as “${normalized.name}” with this persona.`,
+      [
+        {
+          text: language === 'zh' ? '取消' : 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: language === 'zh' ? '确认保存' : 'Save',
+          onPress: () => commitSave(normalized, normalizedAvatar.value || 'U'),
+        },
+      ],
+    );
   };
 
   const avatarActions = [

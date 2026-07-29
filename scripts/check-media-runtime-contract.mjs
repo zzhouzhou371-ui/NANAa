@@ -459,7 +459,7 @@ expect(avatarValue.normalizeAvatarValue('file:///doc/nana-media/avatars/user.jpg
 expect(!avatarValue.hasNanaManagedAvatarPath('https://example.test/nana-media/avatars/user.jpg'), 'remote URLs must not be mistaken for Nana-managed local avatar files');
 const userViewSource = readFileSync(resolve(root, 'src/components/UserView.tsx'), 'utf8');
 const characterViewSource = readFileSync(resolve(root, 'src/components/CharacterView.tsx'), 'utf8');
-expect(userViewSource.includes('createUserAvatarStatePatch'), 'UserView save must apply the shared user avatar state patch');
+expect(userViewSource.includes('saveUserIdentity'), 'UserView save must atomically apply the shared global identity patch');
 expect(userViewSource.includes('normalizeAvatarValue'), 'UserView must validate avatar drafts before persistence');
 expect(characterViewSource.includes('normalizeAvatarValue'), 'CharacterView must validate avatar drafts before persistence');
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');

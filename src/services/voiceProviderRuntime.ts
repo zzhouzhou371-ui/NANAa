@@ -15,6 +15,10 @@ export const REMOTE_VOICE_PRESETS = [
   'shimmer',
 ] as const;
 
+export const MOSSLAND_API_URL = 'https://api.mosi.cn';
+export const MOSSLAND_STT_MODEL = 'moss-transcribe';
+export const MOSSLAND_TTS_MODEL = 'moss-tts';
+
 export interface VoiceProviderStateInput {
   voiceProviderEnabled?: boolean;
   voiceApiUrl?: string;
@@ -49,14 +53,26 @@ export function resolveVoiceProvider(input: VoiceProviderStateInput): ResolvedVo
   const apiKey = source === 'separate'
     ? clean(input.voiceApiKey, 4_096)
     : clean(input.chatApiKey, 4_096);
-  const provider = inferAiProviderKind(apiUrl);
-  const capabilityProvider = source === 'separate' ? 'openAICompatible' : provider;
+  const provider = source === 'separate' && !apiUrl
+    ? 'openAICompatible'
+    : inferAiProviderKind(apiUrl);
+  const capabilityProvider = provider;
   const chatModel = clean(input.chatModel);
-  const sttModel = clean(input.voiceSttModel)
-    || (capabilityProvider === 'officialGemini' ? chatModel || 'gemini-2.5-flash' : 'gpt-4o-mini-transcribe');
-  const ttsModel = clean(input.voiceTtsModel)
-    || (capabilityProvider === 'openAICompatible' ? 'tts-1' : '');
-  const enabled = Boolean(apiKey);
+  const sttModel = capabilityProvider === 'officialMossland'
+    ? MOSSLAND_STT_MODEL
+    : source === 'chat' && capabilityProvider === 'officialGemini'
+      ? chatModel || 'gemini-2.5-flash'
+      : source === 'separate'
+        ? clean(input.voiceSttModel) || 'gpt-4o-mini-transcribe'
+        : 'gpt-4o-mini-transcribe';
+  const ttsModel = capabilityProvider === 'officialMossland'
+    ? MOSSLAND_TTS_MODEL
+    : source === 'separate'
+      ? clean(input.voiceTtsModel) || 'gpt-4o-mini-tts'
+      : capabilityProvider === 'openAICompatible'
+        ? 'gpt-4o-mini-tts'
+        : '';
+  const enabled = source === 'separate' ? true : Boolean(apiKey);
 
   const stt = normalizeProviderCapabilityEndpoint('stt', {
     enabled,
@@ -84,7 +100,8 @@ export function resolveVoiceProvider(input: VoiceProviderStateInput): ResolvedVo
 }
 
 export function voiceProfileHint(apiUrl: string): string {
-  return inferAiProviderKind(apiUrl) === 'officialGemini'
-    ? 'device'
-    : REMOTE_VOICE_PRESETS.join(' / ');
+  const provider = inferAiProviderKind(apiUrl);
+  if (provider === 'officialGemini') return 'device';
+  if (provider === 'officialMossland') return 'voice_id';
+  return REMOTE_VOICE_PRESETS.join(' / ');
 }

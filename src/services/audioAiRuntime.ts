@@ -15,6 +15,8 @@ import { createWritableMediaFile } from './localMediaRepository';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 const OPENAI_STT_MODELS = ['gpt-4o-mini-transcribe', 'whisper-1'];
 const OPENAI_TTS_MODELS = ['tts-1', 'gpt-4o-mini-tts'];
+const MOSSLAND_STT_MODEL = 'moss-transcribe';
+const MOSSLAND_TTS_MODEL = 'moss-tts';
 const MAX_TRANSCRIPTION_BYTES = 6 * 1024 * 1024;
 const MAX_SYNTHESIZED_AUDIO_BYTES = 8 * 1024 * 1024;
 const MAX_TTS_TEXT_LENGTH = 4_000;
@@ -26,6 +28,22 @@ const OPENAI_VOICES = new Set([
 const normalizeBaseUrl = (apiUrl: string) => (apiUrl || GEMINI_BASE_URL).replace(/\/+$/, '');
 
 const openAIRootUrl = (baseUrl: string) => baseUrl.replace(/\/(v1|v1beta)$/i, '');
+
+const hostnameIs = (baseUrl: string, hostname: string) => {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === hostname;
+  } catch {
+    return false;
+  }
+};
+
+export const isOfficialMosslandBaseUrl = (baseUrl: string) => (
+  hostnameIs(baseUrl, 'api.mosi.cn')
+);
+
+const isOfficialOpenAIBaseUrl = (baseUrl: string) => (
+  hostnameIs(baseUrl, 'api.openai.com')
+);
 
 const mimeTypeForUri = (uri: string, fallback = 'audio/m4a') => {
   const lowered = uri.toLowerCase().split('?')[0];
@@ -57,9 +75,17 @@ const openAIHeaders = (apiKey: string) => ({
   Authorization: `Bearer ${apiKey.trim()}`,
 });
 
-const candidateModels = (preferred: string | undefined, defaults: readonly string[]) => (
-  [...new Set([preferred?.trim(), ...defaults].filter((value): value is string => Boolean(value)))]
-);
+const candidateModels = (
+  preferred: string | undefined,
+  defaults: readonly string[],
+  allowFallbacks: boolean,
+) => {
+  const preferredModel = preferred?.trim();
+  if (preferredModel && !allowFallbacks) return [preferredModel];
+  return [...new Set(
+    [preferredModel, ...defaults].filter((value): value is string => Boolean(value)),
+  )];
+};
 
 async function transcribeOpenAICompatible(params: {
   baseUrl: string;
@@ -77,7 +103,11 @@ async function transcribeOpenAICompatible(params: {
   const endpoint = `${openAIRootUrl(params.baseUrl)}/v1/audio/transcriptions`;
   let lastError = '';
 
-  for (const model of candidateModels(params.model, OPENAI_STT_MODELS)) {
+  for (const model of candidateModels(
+    params.model,
+    OPENAI_STT_MODELS,
+    isOfficialOpenAIBaseUrl(params.baseUrl),
+  )) {
     const form = new FormData();
     form.append('file', file as unknown as Blob, fileNameForUri(params.capture.localUri));
     form.append('model', model);
@@ -110,6 +140,54 @@ async function transcribeOpenAICompatible(params: {
     durationSec: params.capture.durationSec,
     errorMessage: lastError || 'Speech-to-text failed',
   };
+}
+
+async function transcribeMossland(params: {
+  baseUrl: string;
+  apiKey: string;
+  capture: MediaCaptureResult;
+  signal?: AbortSignal;
+}): Promise<MediaCaptureResult> {
+  if (!params.capture.localUri) {
+    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No audio captured for transcription' };
+  }
+
+  const form = new FormData();
+  form.append(
+    'file',
+    new File(params.capture.localUri) as unknown as Blob,
+    fileNameForUri(params.capture.localUri),
+  );
+  form.append('model', MOSSLAND_STT_MODEL);
+  form.append('response_format', 'json');
+  const response = await fetchWithTimeout(
+    `${openAIRootUrl(params.baseUrl)}/v1/audio/transcriptions`,
+    {
+      method: 'POST',
+      headers: openAIHeaders(params.apiKey),
+      body: form,
+      signal: params.signal,
+    },
+    30_000,
+  );
+  const payload = await readResponsePayload(response);
+  if (!response.ok) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      localUri: params.capture.localUri,
+      durationSec: params.capture.durationSec,
+      errorMessage: responseErrorMessage(response, payload),
+    };
+  }
+
+  return resolveSpeechToTextResult({
+    transcript: typeof payload.data?.text === 'string'
+      ? payload.data.text
+      : payload.text,
+    localUri: params.capture.localUri,
+    durationSec: params.capture.durationSec,
+  });
 }
 
 async function transcribeGeminiAudio(params: {
@@ -219,6 +297,14 @@ async function transcribeAudioCaptureUnsafe(params: {
   }
 
   const baseUrl = normalizeBaseUrl(params.apiUrl);
+  if (isOfficialMosslandBaseUrl(baseUrl)) {
+    return transcribeMossland({
+      baseUrl,
+      apiKey: params.apiKey,
+      capture: params.capture,
+      signal: params.signal,
+    });
+  }
   if (isOfficialGeminiBaseUrl(baseUrl)) {
     return transcribeGeminiAudio({
       baseUrl,
@@ -300,7 +386,11 @@ async function synthesizeOpenAICompatible(params: {
   }
   let lastError = '';
 
-  for (const model of candidateModels(params.model, OPENAI_TTS_MODELS)) {
+  for (const model of candidateModels(
+    params.model,
+    OPENAI_TTS_MODELS,
+    isOfficialOpenAIBaseUrl(params.baseUrl),
+  )) {
     const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
@@ -359,6 +449,92 @@ async function synthesizeOpenAICompatible(params: {
   };
 }
 
+const writeSynthesizedAudio = async (
+  response: Response,
+  text: string,
+): Promise<MediaCaptureResult> => {
+  const declaredLength = Number(response.headers.get('content-length') || 0);
+  if (declaredLength > MAX_SYNTHESIZED_AUDIO_BYTES) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: text,
+      errorMessage: 'The synthesized voice response is too large',
+    };
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > MAX_SYNTHESIZED_AUDIO_BYTES) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: text,
+      errorMessage: 'The synthesized voice response is too large',
+    };
+  }
+  const file = createWritableMediaFile(
+    'audio',
+    `tts-${Date.now()}-${Math.round(Math.random() * 10000)}.mp3`,
+  );
+  file.create({ overwrite: true, intermediates: true });
+  file.write(bytes);
+  return {
+    phase: 'ready',
+    mediaKind: 'audio',
+    transcript: text,
+    localUri: file.uri,
+    durationSec: voiceDurationFromText(text),
+  };
+};
+
+async function synthesizeMossland(params: {
+  baseUrl: string;
+  apiKey: string;
+  text: string;
+  voiceProfileId?: string;
+  signal?: AbortSignal;
+}): Promise<MediaCaptureResult> {
+  const voiceId = params.voiceProfileId?.trim().slice(0, 160);
+  if (!voiceId) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: params.text,
+      durationSec: voiceDurationFromText(params.text),
+      errorMessage: 'Mossland requires a voice_id before remote speech can be generated',
+    };
+  }
+
+  const response = await fetchWithTimeout(
+    `${openAIRootUrl(params.baseUrl)}/v1/audio/speech`,
+    {
+      method: 'POST',
+      headers: {
+        ...openAIHeaders(params.apiKey),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: MOSSLAND_TTS_MODEL,
+        input: params.text,
+        voice_id: voiceId,
+        response_format: 'mp3',
+        delivery_method: 'audio',
+      }),
+      signal: params.signal,
+    },
+    30_000,
+  );
+  if (!response.ok) {
+    return {
+      phase: 'failed',
+      mediaKind: 'audio',
+      transcript: params.text,
+      durationSec: voiceDurationFromText(params.text),
+      errorMessage: await readApiError(response),
+    };
+  }
+  return writeSynthesizedAudio(response, params.text);
+}
+
 async function synthesizeSpeechAudioUnsafe(params: {
   text: string;
   apiUrl: string;
@@ -391,6 +567,15 @@ async function synthesizeSpeechAudioUnsafe(params: {
   }
 
   const baseUrl = normalizeBaseUrl(params.apiUrl);
+  if (isOfficialMosslandBaseUrl(baseUrl)) {
+    return synthesizeMossland({
+      baseUrl,
+      apiKey: params.apiKey,
+      text,
+      voiceProfileId: params.voiceProfileId,
+      signal: params.signal,
+    });
+  }
   if (isOfficialGeminiBaseUrl(baseUrl)) {
     return {
       phase: 'failed',

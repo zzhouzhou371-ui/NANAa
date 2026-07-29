@@ -44,7 +44,8 @@ export type PendingImagePickerIntent =
   | { kind: 'character-avatar'; characterId: string }
   | { kind: 'character-avatar-draft'; draft: CharacterAvatarDraftSnapshot }
   | { kind: 'user-avatar-draft'; draft: UserAvatarDraftSnapshot }
-  | { kind: 'theme-wallpaper' };
+  | { kind: 'theme-wallpaper' }
+  | { kind: 'moments-cover' };
 
 export interface PhotoPickerResult extends MediaCaptureResult {
   canceled?: boolean;
@@ -337,7 +338,7 @@ const isPendingImagePickerIntent = (value: unknown): value is PendingImagePicker
   if (value.kind === 'character-avatar-draft' || value.kind === 'user-avatar-draft') {
     return isRecord(value.draft);
   }
-  if (value.kind === 'theme-wallpaper') return true;
+  if (value.kind === 'theme-wallpaper' || value.kind === 'moments-cover') return true;
   return false;
 };
 
@@ -368,6 +369,15 @@ export const clearPendingImagePickerIntent = async () => {
 
 export const pickWallpaperFromLibrary = async (): Promise<PhotoPickerResult> => {
   await rememberPendingImagePickerIntent({ kind: 'theme-wallpaper' });
+  try {
+    return await launchPicker('library');
+  } finally {
+    await clearPendingImagePickerIntent();
+  }
+};
+
+export const pickMomentsCoverFromLibrary = async (): Promise<PhotoPickerResult> => {
+  await rememberPendingImagePickerIntent({ kind: 'moments-cover' });
   try {
     return await launchPicker('library');
   } finally {
@@ -516,7 +526,9 @@ export const recoverPendingImagePickerSelection = async (): Promise<RecoveredIma
     if ('code' in pending) {
       return {
         intent,
-        result: intent.kind === 'chat-photo' || intent.kind === 'theme-wallpaper'
+        result: intent.kind === 'chat-photo'
+          || intent.kind === 'theme-wallpaper'
+          || intent.kind === 'moments-cover'
           ? failedResult('library', pending.message || pending.code)
           : failedAvatarResult(pending.message || pending.code),
       };
@@ -524,7 +536,9 @@ export const recoverPendingImagePickerSelection = async (): Promise<RecoveredIma
     if (pending.canceled || !pending.assets[0]) {
       return {
         intent,
-        result: intent.kind === 'chat-photo' || intent.kind === 'theme-wallpaper'
+        result: intent.kind === 'chat-photo'
+          || intent.kind === 'theme-wallpaper'
+          || intent.kind === 'moments-cover'
           ? canceledResult('library')
           : canceledAvatarResult(),
       };
@@ -535,12 +549,16 @@ export const recoverPendingImagePickerSelection = async (): Promise<RecoveredIma
         ? normalizeAsset('library', pending.assets[0])
         : intent.kind === 'theme-wallpaper'
           ? normalizeAsset('library', pending.assets[0])
+          : intent.kind === 'moments-cover'
+            ? normalizeAsset('library', pending.assets[0])
           : await normalizeAvatarAsset(pending.assets[0]),
     };
   } catch (error) {
     return {
       intent,
-      result: intent.kind === 'chat-photo' || intent.kind === 'theme-wallpaper'
+      result: intent.kind === 'chat-photo'
+        || intent.kind === 'theme-wallpaper'
+        || intent.kind === 'moments-cover'
         ? failedResult('library', error)
         : failedAvatarResult(error),
     };

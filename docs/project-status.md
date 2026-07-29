@@ -67,6 +67,13 @@ baked interaction layers.
   release-to-send, slide-to-cancel, and slide-to-convert states. The 1000 ms /
   60 s duration boundaries and -64 / -40 point cancel hysteresis are contract
   tested.
+- Recording feedback now keeps one stable dynamic-island layout across send,
+  cancel, and convert states. Copy crossfades in place, waveform bars animate by
+  transform instead of relayout, and the gesture overlay and playback bubbles
+  use the Kuromi neumorphic material instead of a separate voice visual system.
+- The simulated-phone home remains mounted behind an open app. Closing an app
+  crossfades back to the already-present launcher, so icons and widgets no
+  longer appear to be recreated after every app transition.
 - Home and WeChat have compact layouts for 320x568-class screens.
 - Core controls expose roles, labels, state, and 44-point-class touch targets.
 
@@ -144,6 +151,13 @@ baked interaction layers.
   securely configure a separate OpenAI-compatible voice endpoint, which allows
   Gemini chat to coexist with remote character speech. STT and TTS models are
   independently selectable and time/response-size bounded.
+- Mossland is recognized as an official voice-only provider. Nana uses its
+  documented transcription and standard synthesis request shapes, stores a
+  per-character `voice_id`, and never silently substitutes an OpenAI preset.
+  Streaming synthesis remains reserved for the future live-call transport.
+- Failed voice delivery retains the original local audio and transcript. Retry
+  reuses the same message instead of recording a duplicate; transcript-only
+  recovery can continue as text when the audio file is no longer available.
 - Character editing exposes real remote voice presets, accepts compatible
   custom voice IDs, and provides an immediate preview. Character profiles also
   expose a one-tap preview. Unsupported official-provider voice IDs fail
@@ -208,6 +222,19 @@ baked interaction layers.
   the newest unused real relationship event. Without a key or after a provider
   failure, the local adapter uses persona-sensitive localized copy. Event trace
   IDs are consumed once so outreach cannot cycle backward through old events.
+- Proactive outreach now exposes four user-facing rhythms: off, occasional,
+  normal, and frequent. Existing earlier schedules are preserved, interaction
+  applies only the selected quiet boundary, and each character may optionally
+  use an IANA time zone while the default follows the device.
+- AI context contains an explicit current local date, weekday, time, time-zone
+  name, and offset. Character-local time is included when configured, while the
+  prompt forbids treating clock context as evidence that an event occurred.
+- User name, avatar, and persona are saved atomically after confirmation and
+  resolve through one social-identity boundary. Existing user-authored chat and
+  Moments records are synchronized so WeChat Me and Moments no longer fall back
+  to `User` or render a local file path as text.
+- The Moments cover can be selected from the system photo library, survives
+  Android picker recovery, and can be reset to the bundled default.
 - Relationship notifications are now an explicit global opt-in in Settings.
   The native runtime schedules only the next eligible character reminder,
   preserves the existing global cooldown and resting-window rules, and cancels
@@ -297,6 +324,13 @@ baked interaction layers.
   ESLint checks. A focused 390x844 UI path covers the separate voice service,
   character voice selection, and chat recording states at
   `screenshots/smoke-voice-provider/report.json`.
+- The 2026-07-29 online completion pass added official Mossland STT/TTS,
+  durable failed-voice retry, stable recording/playback motion, global user
+  identity, a replaceable Moments cover, character time zones, four proactive
+  rhythms, and persistent app-shell transitions. TypeScript, ESLint, Android
+  export, localization, and the focused Pixel 7 voice/Moments/profile path pass;
+  the focused UI report is
+  `screenshots/voice-v17-check/report.json`.
 - The final pre-offline online integration pass completed every repository
   contract plus TypeScript, ESLint, localization, and Android export. Its full
   four-viewport UI path covers Settings voice service, character voice editing,
@@ -380,7 +414,9 @@ have a clear relationship job and write to the same trace system.
 ## Next Recommended Work
 
 1. Prepare the next intentional Android test build only after this online-social
-   slice is committed, then verify global/relationship GIF stickers, album
+   slice is committed, then verify Mossland STT/TTS with a real key and
+   `voice_id`, failed-voice retry, recording/playback smoothness, global identity,
+   Moments cover replacement, global/relationship GIF stickers, album
    permissions, character photo sharing, user-photo understanding, and several
    persona-dependent transfer/red-packet accept and decline cases.
 2. In the same long physical-device session, verify autonomous Moments timing,

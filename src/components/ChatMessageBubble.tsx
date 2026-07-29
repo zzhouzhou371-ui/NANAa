@@ -56,6 +56,61 @@ interface Props {
   bubbleVariant: ChatBubbleMaterialVariant;
 }
 
+const VOICE_WAVEFORM_BARS = [8, 13, 18, 11, 16, 22, 14, 9, 19, 13, 17, 10, 21, 15, 8, 13] as const;
+
+function VoiceWaveform({
+  ink,
+  progress,
+}: {
+  ink: string;
+  progress: number;
+}) {
+  const normalizedProgress = Math.max(0, Math.min(1, progress));
+  const renderBars = () => VOICE_WAVEFORM_BARS.map((barHeight, index) => (
+    <View
+      key={`${barHeight}-${index}`}
+      style={{
+        flex: 1,
+        maxWidth: 3,
+        height: barHeight,
+        borderRadius: 2,
+        backgroundColor: index / VOICE_WAVEFORM_BARS.length <= normalizedProgress
+          ? ink
+          : `${ink}70`,
+      }}
+    />
+  ));
+
+  return (
+    <View
+      style={{
+        height: 22,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        overflow: 'hidden',
+      }}
+    >
+      {renderBars()}
+      <MotiView
+        pointerEvents="none"
+        animate={{ scaleX: Math.max(0.001, normalizedProgress) }}
+        transition={{ type: 'timing', duration: 140 }}
+        style={{
+          position: 'absolute',
+          right: 0,
+          bottom: 0,
+          left: 0,
+          height: 1.5,
+          borderRadius: 1,
+          backgroundColor: `${ink}B8`,
+          transformOrigin: 'left center',
+        }}
+      />
+    </View>
+  );
+}
+
 function AvatarContent({
   avatar,
   renderAvatar,
@@ -650,8 +705,10 @@ function VoiceBubbleContent({
     speechLanguage,
   ]);
   const duration = Math.max(0, Math.round(msg.audioDurationSec || playback.durationSec || 0));
-  const durationLabel = formatVoiceDuration(duration);
-  const bars = [8, 13, 18, 11, 16, 22, 14, 9, 19, 13, 17, 10, 21, 15, 8, 13];
+  const elapsed = Math.min(duration, Math.max(0, Math.floor(playback.positionSec)));
+  const durationLabel = playback.isPlaying || playback.progress > 0
+    ? `${formatVoiceDuration(elapsed)} / ${formatVoiceDuration(duration)}`
+    : formatVoiceDuration(duration);
 
   return (
     <View style={{ width: '100%' }}>
@@ -671,23 +728,7 @@ function VoiceBubbleContent({
             : <AudioLines size={16} color={`${ink}C7`} strokeWidth={1.7} />}
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ height: 22, flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-            {bars.map((barHeight, index) => {
-              const played = playback.progress > 0 && index / bars.length <= playback.progress;
-              return (
-                <View
-                  key={`${barHeight}-${index}`}
-                  style={{
-                    flex: 1,
-                    maxWidth: 3,
-                    height: playback.isPlaying && index % 3 === 0 ? Math.min(22, barHeight + 3) : barHeight,
-                    borderRadius: 2,
-                    backgroundColor: played ? ink : `${ink}94`,
-                  }}
-                />
-              );
-            })}
-          </View>
+          <VoiceWaveform ink={ink} progress={playback.progress} />
           <Text style={{ color: `${ink}C7`, fontSize: 11, lineHeight: 15, marginTop: 2, fontVariant: ['tabular-nums'] }}>{durationLabel}</Text>
         </View>
       </Pressable>

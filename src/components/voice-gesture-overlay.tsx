@@ -317,12 +317,14 @@ export function VoiceGestureOverlay() {
               }}
             >
               {displayedMeteringHistory.map((sample, index) => (
-                <View
+                <MotiView
                   key={index}
+                  animate={{ scaleY: Math.max(0.14, sample) }}
+                  transition={{ type: 'timing', duration: 150 }}
                   style={{
                     flex: 1,
                     maxWidth: 2.6,
-                    height: Math.max(4, bubbleHeight * 0.42 * sample),
+                    height: bubbleHeight * 0.42,
                     borderRadius: 2,
                     backgroundColor: 'rgba(48, 20, 38, 0.96)',
                   }}
@@ -450,7 +452,7 @@ export function VoiceGestureOverlay() {
               pointerEvents="none"
               from={{ opacity: 0.82, scale: 0.99 }}
               animate={{ opacity: 1, scale: activeAction === 'send' ? 1.02 : 1.025 }}
-              transition={{ type: 'timing', duration: 96 }}
+              transition={{ type: 'timing', duration: 160 }}
               style={{
                 position: 'absolute',
                 top: surfaceTop,
@@ -502,7 +504,7 @@ export function VoiceGestureOverlay() {
 
           <MotiView
             animate={{ scale: cancelArmed && neumorphic ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: 96 }}
+            transition={{ type: 'timing', duration: 160 }}
             style={{
               position: 'absolute',
               top: zoneLabelTop,
@@ -529,7 +531,7 @@ export function VoiceGestureOverlay() {
 
           <MotiView
             animate={{ scale: transcribeArmed && neumorphic ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: 96 }}
+            transition={{ type: 'timing', duration: 160 }}
             style={{
               position: 'absolute',
               top: zoneLabelTop,
@@ -557,7 +559,7 @@ export function VoiceGestureOverlay() {
 
           <MotiView
             animate={{ scale: activeAction === 'send' && neumorphic ? 1.02 : 1 }}
-            transition={{ type: 'timing', duration: 96 }}
+            transition={{ type: 'timing', duration: 160 }}
             style={{
               position: 'absolute',
               top: sendLabelTop,

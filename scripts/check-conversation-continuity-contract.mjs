@@ -107,7 +107,7 @@ expect(aiSource.includes("'Current Conversation Continuity'"), 'AI context must 
 expect(aiSource.includes("'Private Continuity Update'"), 'normal generation must request a private state patch in the same model call');
 expect(aiSource.includes('parseConversationContinuityEnvelope(rawText)'), 'remote replies must strip and parse private metadata before display');
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
-expect(storeSource.includes('NANA_PERSIST_VERSION = 13'), 'voice provider and online media persistence require store version 13');
+expect(storeSource.includes('NANA_PERSIST_VERSION = 14'), 'voice, identity, time zone, and proactive cadence persistence require store version 14');
 expect(storeSource.includes('normalizeConversationContinuityMap('), 'persisted continuity must be normalized during migration');
 expect(storeSource.includes('conversationContinuityByCharacter: state.conversationContinuityByCharacter'), 'continuity must be included in portable persisted state');
 expect(storeSource.match(/conversationContinuity: state\.conversationContinuityByCharacter/g)?.length >= 3, 'chat, proactive chat, and calls must receive continuity context');

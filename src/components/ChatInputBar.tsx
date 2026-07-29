@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext';
 import { transcribeAudioCapture } from '../services/audioAiRuntime';
 import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { useNativeVoiceCapture } from '../services/nativeAudioRuntime';
+import { deletePersistedMediaFile } from '../services/localMediaRepository';
 import type { MediaCaptureResult } from '../services/mediaRuntime';
 import { useNanaStore } from '../stores/nanaStore';
 import { triggerHaptic } from '../utils/haptics';
@@ -83,6 +84,7 @@ export function ChatInputBar() {
   const permissionBlockedRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const [voicePhase, setVoicePhase] = useState<VoiceGesturePhase>('idle');
+  const [retryableTranscription, setRetryableTranscription] = useState<MediaCaptureResult | null>(null);
   const [webElapsedSec, setWebElapsedSec] = useState(0);
   const [webMeteringSample, setWebMeteringSample] = useState(0.22);
   const {
@@ -90,6 +92,7 @@ export function ChatInputBar() {
     finish: finishNativeVoiceCapture,
     cancel: cancelNativeVoiceCapture,
     discard: discardNativeVoiceCapture,
+    finalize: finalizeNativeVoiceCapture,
     reset: resetNativeVoiceCapture,
     isNativeAvailable: isNativeVoiceAvailable,
     isRecording: isNativeRecording,
@@ -100,6 +103,8 @@ export function ChatInputBar() {
   cancelNativeVoiceCaptureRef.current = cancelNativeVoiceCapture;
   const resetNativeVoiceCaptureRef = useRef(resetNativeVoiceCapture);
   resetNativeVoiceCaptureRef.current = resetNativeVoiceCapture;
+  const retryableTranscriptionRef = useRef(retryableTranscription);
+  retryableTranscriptionRef.current = retryableTranscription;
 
   const hasText = chatInput.trim().length > 0;
   const recordingActive = voicePhase === 'starting'
@@ -134,6 +139,93 @@ export function ChatInputBar() {
     });
     setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2200);
   }, [set, t.voiceMessage]);
+
+  const clearRetryableTranscription = useCallback((deleteAudio = false) => {
+    const retryable = retryableTranscriptionRef.current;
+    if (deleteAudio && retryable?.localUri) {
+      deletePersistedMediaFile(retryable.localUri, 'audio');
+    }
+    retryableTranscriptionRef.current = null;
+    setRetryableTranscription(null);
+  }, []);
+
+  const convertCaptureToText = useCallback(async (
+    capture: MediaCaptureResult,
+    finishingToken = gestureTokenRef.current,
+  ) => {
+    setVoicePhase('converting');
+    const state = useNanaStore.getState();
+    const voiceProvider = resolveVoiceProvider({
+      voiceProviderEnabled: state.voiceProviderEnabled,
+      voiceApiUrl: state.voiceApiUrl,
+      voiceApiKey: state.voiceApiKey,
+      voiceSttModel: state.voiceSttModel,
+      voiceTtsModel: state.voiceTtsModel,
+      chatApiUrl: state.apiUrl,
+      chatApiKey: state.apiKey,
+      chatModel: state.selectedModel,
+    });
+    const transcriptCapture = await transcribeAudioCapture({
+      capture,
+      apiUrl: voiceProvider.stt.apiUrl,
+      apiKey: voiceProvider.stt.apiKey,
+      selectedModel: voiceProvider.stt.model,
+      sttModel: voiceProvider.stt.model,
+      language: state.speechLanguage || 'zh-CN',
+    });
+    if (!canCommitVoiceCapture({
+      mounted: mountedRef.current,
+      interrupted: interruptedRef.current,
+      currentToken: gestureTokenRef.current,
+      finishingToken,
+    })) {
+      if (mountedRef.current) clearVoiceGesture();
+      return;
+    }
+
+    const transcript = transcriptCapture.phase === 'ready'
+      ? transcriptCapture.transcript?.trim()
+      : '';
+    if (!transcript) {
+      const retainedCapture = finalizeNativeVoiceCapture(capture);
+      resetNativeVoiceCapture();
+      retryableTranscriptionRef.current = retainedCapture;
+      setRetryableTranscription(retainedCapture);
+      clearVoiceGesture('failed');
+      showVoiceError(`${transcriptCapture.errorMessage || t.voiceInputPending} · ${t.retryMessage}`);
+      return;
+    }
+
+    if (retryableTranscriptionRef.current?.localUri === capture.localUri) {
+      clearRetryableTranscription(true);
+    } else {
+      discardNativeVoiceCapture(capture);
+    }
+    resetNativeVoiceCapture();
+    clearVoiceGesture();
+    set({ chatInput: transcript, chatPanel: 'none' });
+    inputRef.current?.focus();
+    triggerHaptic('success');
+  }, [
+    clearRetryableTranscription,
+    clearVoiceGesture,
+    discardNativeVoiceCapture,
+    finalizeNativeVoiceCapture,
+    resetNativeVoiceCapture,
+    set,
+    showVoiceError,
+    t.retryMessage,
+    t.voiceInputPending,
+  ]);
+
+  const retryTranscription = useCallback(() => {
+    const capture = retryableTranscriptionRef.current;
+    if (!capture?.localUri || finalizingRef.current) return;
+    finalizingRef.current = true;
+    interruptedRef.current = false;
+    gestureTokenRef.current += 1;
+    void convertCaptureToText(capture, gestureTokenRef.current);
+  }, [convertCaptureToText]);
 
   const finishGesture = useCallback(async (intent: 'send' | 'cancel' | 'transcribe') => {
     if (finalizingRef.current) return;
@@ -187,67 +279,30 @@ export function ChatInputBar() {
     }
 
     if (intent === 'transcribe') {
-      setVoicePhase('converting');
-      const state = useNanaStore.getState();
-      const voiceProvider = resolveVoiceProvider({
-        voiceProviderEnabled: state.voiceProviderEnabled,
-        voiceApiUrl: state.voiceApiUrl,
-        voiceApiKey: state.voiceApiKey,
-        voiceSttModel: state.voiceSttModel,
-        voiceTtsModel: state.voiceTtsModel,
-        chatApiUrl: state.apiUrl,
-        chatApiKey: state.apiKey,
-        chatModel: state.selectedModel,
-      });
-      const transcriptCapture = await transcribeAudioCapture({
-        capture,
-        apiUrl: voiceProvider.stt.apiUrl,
-        apiKey: voiceProvider.stt.apiKey,
-        selectedModel: voiceProvider.stt.model,
-        sttModel: voiceProvider.stt.model,
-        language: state.speechLanguage || 'zh-CN',
-      });
-      discardNativeVoiceCapture(capture);
-      if (!canCommitVoiceCapture({
-        mounted: mountedRef.current,
-        interrupted: interruptedRef.current,
-        currentToken: gestureTokenRef.current,
-        finishingToken,
-      })) {
-        if (mountedRef.current) clearVoiceGesture();
-        return;
-      }
-      const transcript = transcriptCapture.phase === 'ready' ? transcriptCapture.transcript?.trim() : '';
-      if (!transcript) {
-        clearVoiceGesture('failed');
-        showVoiceError(transcriptCapture.errorMessage || t.voiceInputPending);
-        return;
-      }
-      resetNativeVoiceCapture();
-      clearVoiceGesture();
-      set({ chatInput: transcript, chatPanel: 'none' });
-      inputRef.current?.focus();
-      triggerHaptic('success');
+      await convertCaptureToText(capture, finishingToken);
       return;
     }
 
+    clearRetryableTranscription(true);
     resetNativeVoiceCapture();
     clearVoiceGesture();
     void useNanaStore.getState().sendChatMessage('voice', undefined, undefined, capture);
   }, [
     cancelNativeVoiceCapture,
+    clearRetryableTranscription,
     clearVoiceGesture,
+    convertCaptureToText,
     discardNativeVoiceCapture,
     finishNativeVoiceCapture,
     resetNativeVoiceCapture,
     showVoiceError,
-    set,
     t.microphoneUnavailable,
     t.voiceInputPending,
   ]);
 
   const handleVoicePressIn = useCallback((pageY = 0) => {
     if (isBlocked || finalizingRef.current) return;
+    clearRetryableTranscription(true);
     gestureStartYRef.current = pageY;
     gestureStartedAtRef.current = Date.now();
     gestureActiveRef.current = true;
@@ -304,6 +359,7 @@ export function ChatInputBar() {
     });
   }, [
     clearVoiceGesture,
+    clearRetryableTranscription,
     cancelNativeVoiceCapture,
     discardNativeVoiceCapture,
     finishGesture,
@@ -578,20 +634,21 @@ export function ChatInputBar() {
               accessible
               collapsable={false}
               accessibilityRole="button"
-              accessibilityLabel={recordingActive ? t.releaseToSend : t.holdToTalk}
+              accessibilityLabel={retryableTranscription ? `${t.retryMessage}, ${t.convertToText}` : recordingActive ? t.releaseToSend : t.holdToTalk}
               accessibilityHint={t.slideUpToCancel}
               disabled={voicePhase === 'finishing' || voicePhase === 'converting'}
               pressRetentionOffset={{ top: 104, right: 44, bottom: 72, left: 44 }}
-              onPressIn={event => handleVoicePressIn(event.nativeEvent.pageY)}
-              onPressOut={handleVoicePressOut}
-              onTouchMove={event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
+              onPress={retryableTranscription ? retryTranscription : undefined}
+              onPressIn={retryableTranscription ? undefined : event => handleVoicePressIn(event.nativeEvent.pageY)}
+              onPressOut={retryableTranscription ? undefined : handleVoicePressOut}
+              onTouchMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
               onPointerDown={event => {
                 if (Platform.OS !== 'web') return;
                 const target = event.currentTarget as unknown as { setPointerCapture?: (pointerId: number) => void };
                 const pointerId = (event.nativeEvent as { pointerId?: number }).pointerId;
                 if (pointerId !== undefined) target.setPointerCapture?.(pointerId);
               }}
-              onPointerMove={event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
+              onPointerMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
               style={({ pressed }) => ({
                 position: 'absolute',
                 top: 0,
@@ -622,7 +679,11 @@ export function ChatInputBar() {
                       includeFontPadding: false,
                     }}
                   >
-                    {voiceOverlayVisible ? '' : voiceInstruction}
+                    {voiceOverlayVisible
+                      ? ''
+                      : retryableTranscription
+                        ? `${t.retryMessage} · ${t.convertToText}`
+                        : voiceInstruction}
                   </Text>
                 </>
               )}

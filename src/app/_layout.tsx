@@ -108,6 +108,16 @@ export default function RootLayout() {
           } else {
             useNanaStore.setState({ activeApp: 'theme' });
           }
+        } else if (intent.kind === 'moments-cover') {
+          const previousUri = useNanaStore.getState().momentsBg;
+          if (recoveredUri) {
+            useNanaStore.getState().setMomentsCover(recoveredUri);
+            cleanupReplacedWallpaper(previousUri, recoveredUri);
+          }
+          useNanaStore.setState({
+            activeApp: 'wechat',
+            weChatPage: 'moments',
+          });
         } else if (intent.kind === 'character-avatar') {
           const state = useNanaStore.getState();
           const character = state.characters.find(item => item.id === intent.characterId);
@@ -146,9 +156,13 @@ export default function RootLayout() {
             islandNotification: {
               title: intent.kind === 'theme-wallpaper'
                 ? recoveryTranslations.wallpaper
+                : intent.kind === 'moments-cover'
+                  ? recoveryTranslations.moments
                 : recoveryTranslations.photoLibrary,
               desc: intent.kind === 'theme-wallpaper'
                 ? recoveryTranslations.wallpaperPickerError
+                : intent.kind === 'moments-cover'
+                  ? recoveryTranslations.photoLibrary
                 : recoveryTranslations.portraitPickerError,
               status: 'error',
             },

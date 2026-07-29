@@ -4,7 +4,7 @@ import { Check, ImagePlus, Link2, Mic2, RotateCcw, Video } from 'lucide-react-na
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { AnimatedPressable } from './primitives';
-import type { ChatReplyPreference, ReplyMode } from '../types';
+import type { Character, ChatReplyPreference, ReplyMode } from '../types';
 import { CharacterPortrait } from './CharacterPortrait';
 import {
   cleanupReplacedAvatar,
@@ -13,7 +13,7 @@ import {
   type CharacterAvatarDraftSnapshot,
 } from '../services/nativeImagePickerRuntime';
 import { normalizeAvatarValue } from '../services/avatarValueRuntime';
-import { REMOTE_VOICE_PRESETS } from '../services/voiceProviderRuntime';
+import { REMOTE_VOICE_PRESETS, resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 
 const isImageAvatar = (avatar: string) => /^(https?:|data:|file:|content:|blob:)/.test(avatar.trim());
@@ -119,12 +119,42 @@ export function CharacterView() {
   const newCharVoiceProfileId = useNanaStore(s => s.newCharVoiceProfileId);
   const newCharSupportsVideoPersona = useNanaStore(s => s.newCharSupportsVideoPersona);
   const newCharVideoPersonaAsset = useNanaStore(s => s.newCharVideoPersonaAsset);
+  const apiUrl = useNanaStore(s => s.apiUrl);
+  const apiKey = useNanaStore(s => s.apiKey);
+  const selectedModel = useNanaStore(s => s.selectedModel);
+  const voiceProviderEnabled = useNanaStore(s => s.voiceProviderEnabled);
+  const voiceApiUrl = useNanaStore(s => s.voiceApiUrl);
+  const voiceApiKey = useNanaStore(s => s.voiceApiKey);
+  const voiceSttModel = useNanaStore(s => s.voiceSttModel);
+  const voiceTtsModel = useNanaStore(s => s.voiceTtsModel);
+  const language = useNanaStore(s => s.themeConfig.language);
   const friends = useNanaStore(s => s.friends);
   const set = useNanaStore.setState;
   const replyPreferences: ChatReplyPreference[] = ['adaptive', 'textOnly', 'voicePreferred'];
   const [avatarPickerBusy, setAvatarPickerBusy] = useState(false);
   const [showAvatarTextInput, setShowAvatarTextInput] = useState(false);
   const selectedReplyPreference = preferenceFromLegacy(newCharPreferredReplyMode);
+  const voiceProvider = resolveVoiceProvider({
+    voiceProviderEnabled,
+    voiceApiUrl,
+    voiceApiKey,
+    voiceSttModel,
+    voiceTtsModel,
+    chatApiUrl: apiUrl,
+    chatApiKey: apiKey,
+    chatModel: selectedModel,
+  });
+  const usesMosslandVoice = voiceProvider.tts.provider === 'officialMossland';
+  const normalizedDraftVoiceProfileId = (() => {
+    const candidate = newCharVoiceProfileId.trim();
+    if (
+      usesMosslandVoice
+      && REMOTE_VOICE_PRESETS.includes(candidate as (typeof REMOTE_VOICE_PRESETS)[number])
+    ) {
+      return '';
+    }
+    return candidate;
+  })();
   const replyPreferenceLabel = (preference: ChatReplyPreference) => ({
     adaptive: t.replyAdaptive,
     textOnly: t.replyTextOnly,
@@ -252,7 +282,7 @@ export function CharacterView() {
                 preferredReplyMode: newCharPreferredReplyMode,
                 chatReplyPreference: selectedReplyPreference,
                 supportsVoiceReply: newCharSupportsVoiceReply,
-                voiceProfileId: newCharSupportsVoiceReply ? (newCharVoiceProfileId.trim() || undefined) : undefined,
+                voiceProfileId: newCharSupportsVoiceReply ? (normalizedDraftVoiceProfileId || undefined) : undefined,
                 supportsVideoPersona: newCharSupportsVideoPersona,
                 videoPersonaAsset: newCharSupportsVideoPersona ? (newCharVideoPersonaAsset.trim() || undefined) : undefined,
               }
@@ -263,7 +293,7 @@ export function CharacterView() {
       });
       cleanupReplacedAvatar(previousAvatar, useNanaStore.getState());
     } else {
-      const newChar = {
+      const newChar: Character = {
         id: Date.now().toString(),
         name: newCharName.trim(),
         avatar: nextAvatar,
@@ -273,10 +303,11 @@ export function CharacterView() {
         preferredReplyMode: newCharPreferredReplyMode,
         chatReplyPreference: selectedReplyPreference,
         supportsVoiceReply: newCharSupportsVoiceReply,
-        voiceProfileId: newCharSupportsVoiceReply ? (newCharVoiceProfileId.trim() || undefined) : undefined,
+        voiceProfileId: newCharSupportsVoiceReply ? (normalizedDraftVoiceProfileId || undefined) : undefined,
         supportsVideoPersona: newCharSupportsVideoPersona,
         videoPersonaAsset: newCharSupportsVideoPersona ? (newCharVideoPersonaAsset.trim() || undefined) : undefined,
         proactiveMessagingEnabled: true,
+        proactiveMessagingFrequency: 'normal',
       };
       set({ characters: [...state.characters, newChar], editingCharId: null, characterEditorOpen: false });
     }
@@ -504,45 +535,65 @@ export function CharacterView() {
               />
               {newCharSupportsVoiceReply && (
                 <View style={{ marginTop: 2, marginBottom: 14 }}>
-                  <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800', marginBottom: 9, paddingHorizontal: 4 }}>
-                    {t.voicePresets || 'Quick voice choices'}
-                  </Text>
-                  <View
-                    accessibilityRole="radiogroup"
-                    style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}
-                  >
-                    {REMOTE_VOICE_PRESETS.map(voiceId => {
-                      const selected = (newCharVoiceProfileId.trim() || 'alloy') === voiceId;
-                      return (
-                        <AnimatedPressable
-                          key={voiceId}
-                          accessibilityRole="radio"
-                          accessibilityLabel={voiceId}
-                          accessibilityState={{ selected }}
-                          onPress={() => set({ newCharVoiceProfileId: voiceId })}
-                          style={{ minWidth: 74, minHeight: 40, borderRadius: 999 }}
-                        >
-                          <NeumorphicSurface
-                            pointerEvents="none"
-                            depth={selected ? 'inset' : 'raisedSmall'}
-                            tone={selected ? 'pinkGold' : 'lavender'}
-                            radius={999}
-                            style={{ position: 'absolute', inset: 0 }}
-                            contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
-                          >
-                            <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800' }}>
-                              {voiceId}
-                            </Text>
-                          </NeumorphicSurface>
-                        </AnimatedPressable>
-                      );
-                    })}
-                  </View>
+                  {usesMosslandVoice ? (
+                    <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 17, marginBottom: 11, paddingHorizontal: 4 }}>
+                      {language === 'zh'
+                        ? '\u8bf7\u586b\u5199 Mossland \u8fd4\u56de\u7684 voice_id\uff0c\u4e0d\u4f7f\u7528 alloy \u7b49 OpenAI \u97f3\u8272\u540d\u3002'
+                        : 'Enter the voice_id returned by Mossland. OpenAI voice names such as alloy are not used.'}
+                    </Text>
+                  ) : (
+                    <>
+                      <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, fontWeight: '800', marginBottom: 9, paddingHorizontal: 4 }}>
+                        {t.voicePresets || 'Quick voice choices'}
+                      </Text>
+                      <View
+                        accessibilityRole="radiogroup"
+                        style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}
+                      >
+                        {REMOTE_VOICE_PRESETS.map(voiceId => {
+                          const selected = (newCharVoiceProfileId.trim() || 'alloy') === voiceId;
+                          return (
+                            <AnimatedPressable
+                              key={voiceId}
+                              accessibilityRole="radio"
+                              accessibilityLabel={voiceId}
+                              accessibilityState={{ selected }}
+                              onPress={() => set({ newCharVoiceProfileId: voiceId })}
+                              style={{ minWidth: 82, minHeight: 40, borderRadius: 999 }}
+                            >
+                              <NeumorphicSurface
+                                pointerEvents="none"
+                                depth={selected ? 'inset' : 'raisedSmall'}
+                                tone={selected ? 'pinkGold' : 'lavender'}
+                                radius={999}
+                                style={{ position: 'absolute', inset: 0 }}
+                                contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 }}
+                              >
+                                <Text
+                                  numberOfLines={1}
+                                  ellipsizeMode="clip"
+                                  style={{
+                                    flexShrink: 0,
+                                    color: neumorphicPalette.onLightPrimary,
+                                    fontSize: 11.5,
+                                    lineHeight: 15,
+                                    fontWeight: '800',
+                                  }}
+                                >
+                                  {voiceId}
+                                </Text>
+                              </NeumorphicSurface>
+                            </AnimatedPressable>
+                          );
+                        })}
+                      </View>
+                    </>
+                  )}
                   <CharacterField
-                    label={t.voiceProfileId || 'Voice Profile ID'}
-                    value={newCharVoiceProfileId}
+                    label={usesMosslandVoice ? 'Mossland voice_id' : (t.voiceProfileId || 'Voice Profile ID')}
+                    value={usesMosslandVoice ? normalizedDraftVoiceProfileId : newCharVoiceProfileId}
                     onChange={(v) => set({ newCharVoiceProfileId: v })}
-                    placeholder="alloy / custom voice ID"
+                    placeholder={usesMosslandVoice ? 'voice_id' : 'alloy / custom voice ID'}
                   />
                   <AnimatedPressable
                     testID="character-test-voice"
@@ -552,7 +603,7 @@ export function CharacterView() {
                       void useNanaStore.getState().previewCharacterVoice({
                         characterId: editingCharId || undefined,
                         characterName: newCharName.trim() || undefined,
-                        voiceProfileId: newCharVoiceProfileId.trim() || 'alloy',
+                        voiceProfileId: normalizedDraftVoiceProfileId || undefined,
                       });
                     }}
                     style={{ minHeight: 46, borderRadius: 999 }}
@@ -587,22 +638,50 @@ export function CharacterView() {
                 />
               )}
             </View>
-            <View className="flex-row gap-3">
+            <View style={{ flexDirection: 'row', gap: 12, minHeight: 52 }}>
               <AnimatedPressable
+                accessibilityRole="button"
+                accessibilityLabel={t.cancel}
                 onPress={handleCancelEditor}
-                className="flex-1 py-3 rounded-full items-center"
-                style={{ backgroundColor: neumorphicPalette.lavender, boxShadow: '-3px -3px 6px rgba(255,248,255,0.42), 3px 4px 6px rgba(54,43,67,0.20)' }}
+                style={{ flex: 1, minHeight: 52, borderRadius: 18 }}
               >
-                <Text style={{ color: neumorphicPalette.onLightPrimary, fontWeight: '800' }}>{t.cancel}</Text>
+                <NeumorphicSurface
+                  pointerEvents="none"
+                  depth="raisedSmall"
+                  tone="lavender"
+                  radius={18}
+                  style={{ position: 'absolute', inset: 0 }}
+                  contentStyle={{ minHeight: 52, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ flexShrink: 0, color: neumorphicPalette.onLightPrimary, fontSize: 14, lineHeight: 18, fontWeight: '800' }}
+                  >
+                    {t.cancel}
+                  </Text>
+                </NeumorphicSurface>
               </AnimatedPressable>
               <AnimatedPressable
                 accessibilityRole="button"
                 accessibilityLabel={t.save}
                 onPress={handleSave}
-                className="flex-[2] py-3 rounded-full items-center"
-                style={{ flex: 2, backgroundColor: neumorphicPalette.pinkGold, boxShadow: '-3px -3px 6px rgba(255,248,255,0.42), 3px 4px 6px rgba(54,43,67,0.20)' }}
+                style={{ flex: 2, minHeight: 52, borderRadius: 18 }}
               >
-                <Text style={{ color: neumorphicPalette.onLightPrimary, fontWeight: '800' }}>{t.save}</Text>
+                <NeumorphicSurface
+                  pointerEvents="none"
+                  depth="raisedSmall"
+                  tone="pinkGold"
+                  radius={18}
+                  style={{ position: 'absolute', inset: 0 }}
+                  contentStyle={{ minHeight: 52, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{ flexShrink: 0, color: neumorphicPalette.onLightPrimary, fontSize: 14, lineHeight: 18, fontWeight: '800' }}
+                  >
+                    {t.save}
+                  </Text>
+                </NeumorphicSurface>
               </AnimatedPressable>
             </View>
           </View>

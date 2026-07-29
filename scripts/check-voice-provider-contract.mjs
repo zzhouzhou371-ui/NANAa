@@ -49,9 +49,11 @@ const geminiChat = runtime.resolveVoiceProvider({
   chatApiUrl: 'https://generativelanguage.googleapis.com',
   chatApiKey: 'gemini-key',
   chatModel: 'gemini-2.5-flash',
+  voiceSttModel: 'gpt-4o-mini-transcribe',
 });
 expect(geminiChat.source === 'chat', 'voice must reuse chat settings by default');
 expect(geminiChat.sttDiagnostic.status === 'ready', 'Gemini chat audio must support STT');
+expect(geminiChat.stt.model === 'gemini-2.5-flash', 'Gemini STT must use the Gemini model instead of inheriting the OpenAI STT default');
 expect(geminiChat.ttsDiagnostic.status === 'unsupported', 'Gemini TTS must expose device fallback instead of pretending to be remote');
 
 const separate = runtime.resolveVoiceProvider({
@@ -78,6 +80,20 @@ const incompleteSeparate = runtime.resolveVoiceProvider({
 expect(incompleteSeparate.sttDiagnostic.status === 'unconfigured', 'a separate voice service must require an explicit API URL');
 expect(incompleteSeparate.ttsDiagnostic.status === 'unconfigured', 'separate TTS must not silently fall back to Gemini');
 
+const mossland = runtime.resolveVoiceProvider({
+  voiceProviderEnabled: true,
+  voiceApiUrl: 'https://api.mosi.cn',
+  voiceApiKey: 'mossland-key',
+  voiceSttModel: 'gpt-4o-mini-transcribe',
+  voiceTtsModel: 'gpt-4o-mini-tts',
+});
+expect(mossland.stt.provider === 'officialMossland', 'the official MOSI host must resolve to the Mossland provider');
+expect(mossland.stt.model === 'moss-transcribe', 'Mossland STT must use the documented moss-transcribe model');
+expect(mossland.tts.model === 'moss-tts', 'Mossland TTS must use the documented moss-tts model');
+expect(mossland.sttDiagnostic.status === 'ready', 'configured Mossland STT must diagnose as ready');
+expect(mossland.ttsDiagnostic.status === 'ready', 'configured Mossland TTS must diagnose as ready');
+expect(runtime.voiceProfileHint('https://api.mosi.cn') === 'voice_id', 'Mossland character voice setup must request a voice_id');
+
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
 const settingsSource = readFileSync(resolve(root, 'src/components/SettingsView.tsx'), 'utf8');
 const characterSource = readFileSync(resolve(root, 'src/components/CharacterView.tsx'), 'utf8');
@@ -94,10 +110,15 @@ expect(characterSource.includes('character-test-voice'), 'the character editor m
 expect(profileSource.includes('profile-test-voice-'), 'the character profile must expose a voice preview');
 expect(playbackSource.includes('sharedVoicePlayer'), 'voice bubbles must share one player instead of allocating one per message');
 expect(!playbackSource.includes('useAudioPlayer('), 'voice bubble playback must not allocate a React audio player per bubble');
+expect(playbackSource.includes('updateInterval: 120'), 'voice playback must publish smooth low-cost progress updates');
+expect(!playbackSource.includes("if (status.didJustFinish) {\n      setTimeout"), 'finished shared playback must preserve its final position so replay can seek accurately');
 expect(speechSource.includes('getAvailableVoicesAsync'), 'device fallback must resolve an installed system voice');
 expect(speechSource.includes('void Speech.stop();'), 'device speech timeout must stop audio before call recording resumes');
 expect(audioAiSource.includes('is not an OpenAI voice'), 'unsupported official voice IDs must fail honestly instead of silently changing voice');
 expect(audioAiSource.includes('MAX_TRANSCRIPTION_BYTES = 6 * 1024 * 1024'), 'speech transcription must keep base64 memory bounded');
+expect(audioAiSource.includes("form.append('response_format', 'json')"), 'Mossland STT must request the documented synchronous JSON response');
+expect(audioAiSource.includes("voice_id: voiceId"), 'Mossland TTS must send the documented voice_id field');
+expect(!audioAiSource.includes('moss-transcribe-diarize'), 'Nana must not invent or opt into an undocumented streaming transcription flow');
 expect(bubbleSource.includes('speakSpeechSynthesisPlan'), 'stored voice messages without remote audio must remain playable through device speech');
 expect(storeSource.includes('cancelActiveCallVoiceRequest();'), 'ending or replacing a call must cancel in-flight voice requests');
 expect(storeSource.includes('stopSharedVoiceMessagePlayback();'), 'calls must release chat voice playback before starting');

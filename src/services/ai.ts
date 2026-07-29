@@ -176,6 +176,117 @@ interface GenerateParams {
   selectedModel: string;
   replaceMacros: (text: string, userName: string, charName: string, persona: string) => string;
   signal?: AbortSignal;
+  now?: number;
+  deviceTimeZone?: string;
+}
+
+export interface ModelLocalClock {
+  date: string;
+  weekday: string;
+  time: string;
+  timeZone: string;
+  utcOffset: string;
+}
+
+export interface ModelTimeContext {
+  now: number;
+  device: ModelLocalClock;
+  character: ModelLocalClock;
+  characterFollowsDevice: boolean;
+}
+
+const validTimeZone = (value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const candidate = value.trim();
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(0);
+    return candidate;
+  } catch {
+    return null;
+  }
+};
+
+const resolvedDeviceTimeZone = (override?: string) => (
+  validTimeZone(override)
+  || validTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  || 'UTC'
+);
+
+const modelLocalClock = (now: number, timeZone: string): ModelLocalClock => {
+  const date = new Date(now);
+  const parts = new Intl.DateTimeFormat('en-US-u-ca-iso8601-nu-latn', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => (
+    parts.find(candidate => candidate.type === type)?.value || ''
+  );
+  let utcOffset = 'UTC';
+  try {
+    const offsetPart = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'longOffset',
+    }).formatToParts(date).find(candidate => candidate.type === 'timeZoneName')?.value;
+    if (offsetPart) utcOffset = offsetPart;
+  } catch {
+    // Some older Hermes/Intl builds omit longOffset. The IANA zone remains explicit.
+  }
+
+  return {
+    date: `${part('year')}-${part('month')}-${part('day')}`,
+    weekday: part('weekday'),
+    time: `${part('hour')}:${part('minute')}:${part('second')}`,
+    timeZone,
+    utcOffset,
+  };
+};
+
+export function resolveModelTimeContext(params: {
+  activeChar?: Character;
+  now?: number;
+  deviceTimeZone?: string;
+}): ModelTimeContext {
+  const now = typeof params.now === 'number' && Number.isFinite(params.now)
+    ? params.now
+    : Date.now();
+  const deviceTimeZone = resolvedDeviceTimeZone(params.deviceTimeZone);
+  const characterTimeZone = validTimeZone(params.activeChar?.timeZone) || deviceTimeZone;
+  return {
+    now,
+    device: modelLocalClock(now, deviceTimeZone),
+    character: modelLocalClock(now, characterTimeZone),
+    characterFollowsDevice: characterTimeZone === deviceTimeZone,
+  };
+}
+
+export function formatModelTimeContext(context: ModelTimeContext) {
+  const deviceLine = [
+    `Device local date: ${context.device.date}`,
+    `Device weekday: ${context.device.weekday}`,
+    `Device local time: ${context.device.time}`,
+    `Device time zone: ${context.device.timeZone} (${context.device.utcOffset})`,
+  ].join('\n');
+  const characterLine = context.characterFollowsDevice
+    ? 'Character time zone: follows the device time zone.'
+    : [
+        `Character local date: ${context.character.date}`,
+        `Character weekday: ${context.character.weekday}`,
+        `Character local time: ${context.character.time}`,
+        `Character time zone: ${context.character.timeZone} (${context.character.utcOffset})`,
+      ].join('\n');
+
+  return [
+    deviceLine,
+    characterLine,
+    'Treat this as current clock context only. Do not invent an event, activity, location, or memory from the time.',
+  ].join('\n');
 }
 
 export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' | 'selectedModel'>): AiContextBuildResult {
@@ -189,6 +300,16 @@ export function buildAiContext(params: Omit<GenerateParams, 'apiUrl' | 'apiKey' 
   const recallWindowSize = Number.isFinite(memoryWindowSize)
     ? Math.max(1, Math.min(50, Math.floor(memoryWindowSize)))
     : 12;
+
+  appendSection(
+    sections,
+    'Current Local Date And Time',
+    formatModelTimeContext(resolveModelTimeContext({
+      activeChar,
+      now: params.now,
+      deviceTimeZone: params.deviceTimeZone,
+    })),
+  );
 
   const sceneLines = [
     activePreset.sceneMode ? `Mode: ${activePreset.sceneMode}` : '',

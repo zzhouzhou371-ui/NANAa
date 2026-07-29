@@ -1,9 +1,10 @@
-import { Image, ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { ChevronRight, Heart, Settings, Smile, Wallet } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { AnimatedPressable } from './primitives';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
+import { CharacterPortrait } from './CharacterPortrait';
 
 const meColors = {
   profile: '#B09EAE',
@@ -14,13 +15,12 @@ const meColors = {
 } as const;
 
 export function MeTab() {
-  const { t, renderAvatar } = useApp();
+  const { t } = useApp();
   const myAvatar = useNanaStore(s => s.myAvatar);
   const myName = useNanaStore(s => s.myName);
   const walletBalance = useNanaStore(s => s.walletBalance);
   const set = useNanaStore.setState;
   const setActiveApp = useNanaStore(s => s.setActiveApp);
-  const avatar = renderAvatar(myAvatar);
 
   const menuItems = [
     {
@@ -86,11 +86,12 @@ export function MeTab() {
             style={{ width: 62, height: 62, backgroundColor: '#C7B6C3' }}
             contentStyle={{ alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}
           >
-            {typeof avatar === 'string' && avatar.startsWith('http') ? (
-              <Image source={{ uri: avatar }} style={{ width: '100%', height: '100%' }} />
-            ) : (
-              <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 24 }}>{avatar}</Text>
-            )}
+            <CharacterPortrait
+              avatar={myAvatar}
+              fallback={myName.trim()[0] || 'U'}
+              fontSize={24}
+              color={neumorphicPalette.onLightPrimary}
+            />
           </NeumorphicSurface>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 18, fontWeight: '800' }} numberOfLines={1}>

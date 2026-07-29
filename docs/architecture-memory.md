@@ -38,6 +38,9 @@ The Zustand root persists product configuration and relationship state, includin
 - Memory settings and last forwarded message IDs.
 - Unread counts.
 - Call logs and relationship traces.
+- Per-character proactive rhythm and optional IANA time zone.
+- A durable Moments cover and one global user identity resolved across chat,
+  WeChat Me, and Moments.
 
 Chat history remains available through `useNanaStore` as the current in-memory
 compatibility view, but native durability is owned by
@@ -322,6 +325,12 @@ Future AI extensions should be separated by intent:
 - World or schedule generation.
 - Object/photo/story generation.
 
+Current time is context, not relationship evidence. `buildAiContext` may expose
+the device clock and an optional character-local clock so a character can speak
+naturally about morning, evening, weekdays, and elapsed time. It must not create
+a trace or let the model infer that an unobserved event happened merely because
+of the current clock.
+
 ## Media Runtime Boundary
 
 `src/services/mediaRuntime.ts` and the adjacent native runtime services are the
@@ -336,6 +345,19 @@ Current native mappings:
 - Photo-library and system-camera selection: `expo-image-picker`.
 - Durable media promotion: `expo-file-system`.
 - API-secret storage: `expo-secure-store`.
+
+Voice providers are resolved by capability before a request is built. The chat
+provider may be reused only when it actually supports the requested speech
+operation; otherwise the separate voice configuration is authoritative.
+Official Mossland uses its own strict STT and standard TTS payloads and accepts
+per-character `voice_id` values. OpenAI preset names must never be injected into
+that request. Live streaming synthesis is a future call-transport concern, not
+the chat voice-message path.
+
+Voice-message failure is recoverable state. A failed outgoing message retains
+its durable audio URI, duration, and transcript. Retry reuses the original
+message identity and media; UI code must not append a second bubble merely to
+retry recognition or delivery.
 
 Do not import native audio, camera, or video modules directly into chat
 components. Add native capability behind this service or a closely related
@@ -363,6 +385,12 @@ proactive character events.
 
 Avoid making it a generic toast dump. Use it for events that feel native to the
 phone shell.
+
+Recording is one continuous island presentation. Gesture phase changes update
+copy and accent in place; they do not replace the island, translate labels
+vertically, or relayout waveform bars. Home and app surfaces follow the same
+continuity rule: the launcher remains mounted behind the active app and is
+revealed after the app exit crossfade.
 
 ## Phone Chrome And Weather Runtime
 

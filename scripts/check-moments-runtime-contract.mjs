@@ -190,7 +190,12 @@ expect(
 );
 
 const momentsViewSource = readFileSync(resolve(root, 'src/components/MomentsView.tsx'), 'utf8');
-expect(!momentsViewSource.includes('Plus'), 'Moments must not render a second absolute plus button');
+expect(
+  !momentsViewSource.includes('<Plus ')
+    && !momentsViewSource.includes('<Plus\n')
+    && !momentsViewSource.includes('{ Plus }'),
+  'Moments must not render a second absolute plus button',
+);
 expect(momentsViewSource.includes("from 'expo-image'"), 'Moments images must use the Expo image boundary');
 expect(momentsViewSource.includes('NeumorphicSurface'), 'Moments cards must use the current neumorphic material');
 expect(momentsViewSource.includes('replyToCommentId'), 'Moments must expose reply-aware comment UI');

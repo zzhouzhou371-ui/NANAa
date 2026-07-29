@@ -10,6 +10,7 @@ export type ConversationOpenLoopOwner = 'user' | 'character' | 'shared';
 /** @deprecated Persisted V1/UI compatibility. New product code uses ChatReplyPreference. */
 export type ReplyMode = 'auto' | 'text' | 'voice';
 export type ChatReplyPreference = 'adaptive' | 'textOnly' | 'voicePreferred';
+export type ProactiveMessagingFrequency = 'off' | 'occasional' | 'normal' | 'frequent';
 
 export type PaymentKind = 'transfer' | 'redPacket';
 export type PaymentDirection = 'outgoing' | 'incoming';
@@ -145,7 +146,11 @@ export interface Character {
   voiceProfileId?: string;
   supportsVideoPersona?: boolean;
   videoPersonaAsset?: string;
+  /** Controls relationship-initiated chat cadence. `off` supersedes the legacy boolean. */
+  proactiveMessagingFrequency?: ProactiveMessagingFrequency;
   proactiveMessagingEnabled?: boolean;
+  /** Optional IANA time zone. Empty/undefined follows the user's device time zone. */
+  timeZone?: string;
   proactiveMomentsMode?: ProactiveMomentsMode;
   autonomousImageSharingEnabled?: boolean;
 }

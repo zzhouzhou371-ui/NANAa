@@ -63,9 +63,7 @@ const APPS = [
   { labelKey: 'photos', icon: <Image size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/photos.png') },
 ];
 
-function AppContent() {
-  const activeApp = useNanaStore(s => s.activeApp);
-
+function AppContent({ activeApp }: { activeApp: string | null }) {
   if (activeApp === 'wechat') return <WeChatRootView />;
   if (activeApp === 'characters') return <CharacterView />;
   if (activeApp === 'settings') return <SettingsView />;
@@ -181,7 +179,8 @@ function ChatHeaderPopover({
 
 function AppOverlay() {
   const { t } = useApp();
-  const activeApp = useNanaStore(s => s.activeApp);
+  const storeActiveApp = useNanaStore(s => s.activeApp);
+  const [renderedApp, setRenderedApp] = useState(storeActiveApp);
   const callOverlay = useNanaStore(s => s.callOverlay);
   const chromeStyle = useNanaStore(s => s.themeConfig.chromeStyle);
   const weChatPage = useNanaStore(s => s.weChatPage);
@@ -204,6 +203,7 @@ function AppOverlay() {
   const islandExpanded = useDynamicIslandExpanded();
   const reduceMotionEnabled = useReduceMotionEnabled();
   const [chatHeaderMenu, setChatHeaderMenu] = useState<ChatHeaderMenu>('none');
+  const activeApp = storeActiveApp ?? renderedApp;
   const isCallActive = activeApp === 'wechat' && callOverlay.show;
   const shellInk = wechatTheme.ink;
   const shellMuted = wechatTheme.inkMuted;
@@ -234,6 +234,19 @@ function AppOverlay() {
   useEffect(() => {
     setChatHeaderMenu('none');
   }, [activeChatId, weChatPage]);
+
+  useEffect(() => {
+    if (storeActiveApp) {
+      setRenderedApp(storeActiveApp);
+      return undefined;
+    }
+    if (!renderedApp) return undefined;
+    const timer = setTimeout(
+      () => setRenderedApp(null),
+      reduceMotionEnabled ? 100 : 220,
+    );
+    return () => clearTimeout(timer);
+  }, [reduceMotionEnabled, renderedApp, storeActiveApp]);
 
   useEffect(() => {
     if (chatHeaderMenu === 'none' || Platform.OS !== 'android') return undefined;
@@ -533,7 +546,7 @@ function AppOverlay() {
       </View>}
 
       <View style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <AppContent />
+        <AppContent activeApp={activeApp} />
         <PromptModal />
       </View>
 
@@ -552,7 +565,15 @@ function AppOverlay() {
   if (!activeApp) return null;
 
   return (
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }}>
+    <MotiView
+      from={{ opacity: 0 }}
+      animate={{ opacity: storeActiveApp ? 1 : 0 }}
+      transition={{
+        type: 'timing',
+        duration: reduceMotionEnabled ? 100 : 220,
+      }}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40 }}
+    >
       <View style={{ flex: 1 }}>
         <View
           pointerEvents="none"
@@ -563,7 +584,7 @@ function AppOverlay() {
         />
         {content}
       </View>
-    </View>
+    </MotiView>
   );
 }
 
@@ -596,13 +617,17 @@ export default function HomeScreen() {
         >
           <AmbientBackground />
         </ThickGlassBackdropTarget>
-        {!activeApp ? (
+        <View
+          pointerEvents={activeApp ? 'none' : 'auto'}
+          accessibilityElementsHidden={Boolean(activeApp)}
+          importantForAccessibility={activeApp ? 'no-hide-descendants' : 'auto'}
+          style={{ flex: 1 }}
+        >
           <MotiView
-            from={{ paddingTop: homeTopPadding }}
             animate={{ paddingTop: homeTopPadding }}
             transition={reduceMotionEnabled
               ? { type: 'timing', duration: 100 }
-              : { type: 'spring', damping: 24, stiffness: 245, mass: 0.8 }}
+              : { type: 'timing', duration: 180 }}
             style={{ flex: 1, alignItems: 'center', paddingBottom: insets.bottom + 12 }}
           >
             <ScrollView
@@ -662,7 +687,7 @@ export default function HomeScreen() {
               <BottomDock compact={compactHeight} />
             </View>
           </MotiView>
-        ) : null}
+        </View>
 
         <AppOverlay />
       </View>

@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { ActivityIndicator, View, Text, ScrollView, Switch } from 'react-native';
-import { AudioLines, BellRing, ImagePlus, MessageCircle, Smile, Video } from 'lucide-react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, View, Text, TextInput, ScrollView, Switch } from 'react-native';
+import { AudioLines, BellRing, Clock3, ImagePlus, MessageCircle, Smile, Video } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
+import type { ProactiveMessagingFrequency } from '../types';
 import { AnimatedPressable } from './primitives';
 import { wechatTheme } from './wechatTheme';
 import { CharacterPortrait } from './CharacterPortrait';
@@ -18,9 +19,10 @@ export function ProfileView() {
   const { t } = useApp();
   const activeProfileId = useNanaStore(s => s.activeProfileId);
   const characters = useNanaStore(s => s.characters);
-  const setCharacterProactiveMessagingEnabled = useNanaStore(
-    s => s.setCharacterProactiveMessagingEnabled,
+  const setCharacterProactiveMessagingFrequency = useNanaStore(
+    s => s.setCharacterProactiveMessagingFrequency,
   );
+  const setCharacterTimeZone = useNanaStore(s => s.setCharacterTimeZone);
   const setCharacterProactiveMomentsMode = useNanaStore(
     s => s.setCharacterProactiveMomentsMode,
   );
@@ -33,8 +35,20 @@ export function ProfileView() {
   const set = useNanaStore.setState;
   const [avatarPickerBusy, setAvatarPickerBusy] = useState(false);
   const [characterMediaPickerBusy, setCharacterMediaPickerBusy] = useState(false);
+  const [timeZoneDraft, setTimeZoneDraft] = useState('');
 
   const char = characters.find(c => c.id === activeProfileId);
+  const deviceTimeZone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  }, []);
+  useEffect(() => {
+    setTimeZoneDraft(char?.timeZone || '');
+  }, [char?.id, char?.timeZone]);
+
   if (!char) {
     return (
       <View className="flex-1 items-center justify-center">
@@ -47,11 +61,44 @@ export function ProfileView() {
   const replyPreferenceLabel = replyPreference === 'textOnly'
     ? t.replyTextOnly
     : replyPreference === 'voicePreferred' ? t.replyVoicePreferred : t.replyAdaptive;
-  const proactiveMessagingEnabled = char.proactiveMessagingEnabled !== false;
+  const proactiveMessagingFrequency: ProactiveMessagingFrequency =
+    char.proactiveMessagingEnabled === false
+      ? 'off'
+      : char.proactiveMessagingFrequency || 'normal';
   const proactiveMomentsMode = char.proactiveMomentsMode || 'occasional';
   const autonomousImageSharingEnabled = char.autonomousImageSharingEnabled === true;
   const characterMediaCount = characterMediaAssets.filter(asset => asset.characterId === char.id).length;
   const isChinese = language === 'zh';
+  const frequencyOptions: [ProactiveMessagingFrequency, string][] = [
+    ['off', isChinese ? '\u5173\u95ed' : 'Off'],
+    ['occasional', isChinese ? '\u5076\u5c14' : 'Low'],
+    ['normal', isChinese ? '\u6b63\u5e38' : 'Normal'],
+    ['frequent', isChinese ? '\u9891\u7e41' : 'Frequent'],
+  ];
+
+  const saveTimeZone = () => {
+    const candidate = timeZoneDraft.trim();
+    if (!candidate) {
+      setCharacterTimeZone(char.id, undefined);
+      return;
+    }
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(0);
+      setCharacterTimeZone(char.id, candidate);
+    } catch {
+      setTimeZoneDraft(char.timeZone || '');
+      set({
+        islandNotification: {
+          title: isChinese ? '\u65f6\u533a\u683c\u5f0f\u4e0d\u5bf9' : 'Invalid time zone',
+          desc: isChinese
+            ? '\u8bf7\u8f93\u5165\u4f8b\u5982 Asia/Shanghai \u7684\u6807\u51c6\u65f6\u533a'
+            : 'Use a standard time zone such as Asia/Shanghai.',
+          status: 'error',
+        },
+      });
+      setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2200);
+    }
+  };
 
   const handleChooseAvatar = async () => {
     if (avatarPickerBusy) return;
@@ -169,17 +216,15 @@ export function ProfileView() {
             </View>
             <View
               style={{
-                minHeight: 72,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 12,
+                minHeight: 108,
+                gap: 9,
                 paddingHorizontal: 4,
-                paddingVertical: 8,
+                paddingVertical: 10,
                 borderBottomWidth: 0.5,
                 borderBottomColor: 'rgba(48,37,55,0.18)',
               }}
             >
-              <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+              <View style={{ minWidth: 0, gap: 3 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <BellRing size={16} color={neumorphicPalette.onLightPrimary} />
                   <Text style={{ flex: 1, minWidth: 0, color: neumorphicPalette.onLightPrimary, fontSize: 13, lineHeight: 18, fontWeight: '700' }}>
@@ -187,18 +232,113 @@ export function ProfileView() {
                   </Text>
                 </View>
                 <Text style={{ marginLeft: 24, color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 16, fontWeight: '600' }}>
-                  {proactiveMessagingEnabled ? t.proactiveMessagesOn : t.proactiveMessagesOff}
+                  {isChinese
+                    ? '\u8bbe\u5b9a\u8fd9\u4e2a\u89d2\u8272\u4f1a\u591a\u4e45\u4e3b\u52a8\u6765\u627e\u4f60'
+                    : 'Choose how often this character reaches out first'}
                 </Text>
               </View>
-              <Switch
-                testID={`proactive-message-switch-${char.id}`}
-                accessibilityLabel={`${char.name}: ${t.proactiveMessages}`}
-                accessibilityHint={t.proactiveMessagesDesc}
-                value={proactiveMessagingEnabled}
-                onValueChange={enabled => {
-                  setCharacterProactiveMessagingEnabled(char.id, enabled);
-                }}
-              />
+              <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', gap: 6, marginLeft: 24 }}>
+                {frequencyOptions.map(([frequency, label]) => {
+                  const selected = proactiveMessagingFrequency === frequency;
+                  return (
+                    <AnimatedPressable
+                      key={frequency}
+                      testID={`proactive-message-frequency-${char.id}-${frequency}`}
+                      accessibilityRole="radio"
+                      accessibilityLabel={`${char.name}: ${label}`}
+                      accessibilityHint={t.proactiveMessagesDesc}
+                      accessibilityState={{ selected }}
+                      onPress={() => setCharacterProactiveMessagingFrequency(char.id, frequency)}
+                      style={{ flex: 1, minWidth: 0, minHeight: 40, borderRadius: 13 }}
+                    >
+                      <NeumorphicSurface
+                        pointerEvents="none"
+                        depth={selected ? 'inset' : 'raisedSmall'}
+                        tone={selected ? 'champagnePink' : 'lavender'}
+                        radius={13}
+                        style={{ position: 'absolute', inset: 0 }}
+                        contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 }}
+                      >
+                        <Text
+                          numberOfLines={1}
+                          style={{ color: neumorphicPalette.onLightPrimary, fontSize: 10.5, lineHeight: 14, fontWeight: selected ? '900' : '700' }}
+                        >
+                          {label}
+                        </Text>
+                      </NeumorphicSurface>
+                    </AnimatedPressable>
+                  );
+                })}
+              </View>
+            </View>
+            <View
+              style={{
+                minHeight: 118,
+                gap: 8,
+                paddingHorizontal: 4,
+                paddingVertical: 10,
+                borderBottomWidth: 0.5,
+                borderBottomColor: 'rgba(48,37,55,0.18)',
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Clock3 size={16} color={neumorphicPalette.onLightPrimary} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 13, lineHeight: 18, fontWeight: '700' }}>
+                    {isChinese ? '\u89d2\u8272\u65f6\u533a' : 'Character time zone'}
+                  </Text>
+                  <Text numberOfLines={1} style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 16 }}>
+                    {char.timeZone
+                      ? char.timeZone
+                      : `${isChinese ? '\u8ddf\u968f\u8bbe\u5907' : 'Follows device'} · ${deviceTimeZone}`}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginLeft: 24 }}>
+                <NeumorphicSurface
+                  depth="inset"
+                  tone="lavender"
+                  radius={14}
+                  style={{ flex: 1, minHeight: 44 }}
+                  contentStyle={{ justifyContent: 'center', paddingHorizontal: 12 }}
+                >
+                  <TextInput
+                    accessibilityLabel={isChinese ? '\u89d2\u8272\u65f6\u533a' : 'Character time zone'}
+                    value={timeZoneDraft}
+                    onChangeText={setTimeZoneDraft}
+                    onBlur={saveTimeZone}
+                    onSubmitEditing={saveTimeZone}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder={deviceTimeZone}
+                    placeholderTextColor="rgba(55,46,63,0.52)"
+                    returnKeyType="done"
+                    style={{ minHeight: 44, paddingVertical: 0, color: neumorphicPalette.onLightPrimary, fontSize: 12.5 }}
+                  />
+                </NeumorphicSurface>
+                <AnimatedPressable
+                  accessibilityRole="button"
+                  accessibilityLabel={isChinese ? '\u8ddf\u968f\u8bbe\u5907\u65f6\u533a' : 'Follow device time zone'}
+                  onPress={() => {
+                    setTimeZoneDraft('');
+                    setCharacterTimeZone(char.id, undefined);
+                  }}
+                  style={{ minWidth: 72, minHeight: 44, borderRadius: 14 }}
+                >
+                  <NeumorphicSurface
+                    pointerEvents="none"
+                    depth="raisedSmall"
+                    tone="lavender"
+                    radius={14}
+                    style={{ position: 'absolute', inset: 0 }}
+                    contentStyle={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 }}
+                  >
+                    <Text numberOfLines={1} style={{ color: neumorphicPalette.onLightPrimary, fontSize: 11, fontWeight: '800' }}>
+                      {isChinese ? '\u8ddf\u968f\u8bbe\u5907' : 'Device'}
+                    </Text>
+                  </NeumorphicSurface>
+                </AnimatedPressable>
+              </View>
             </View>
             <View
               style={{

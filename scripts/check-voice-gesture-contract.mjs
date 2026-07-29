@@ -61,9 +61,12 @@ expect(chatInputSource.includes('pressRetentionOffset={{ top: 104, right: 44, bo
 expect(chatInputSource.includes('durationMillis: capture.durationMillis'), 'chat minimum duration gate must use recorder-measured milliseconds');
 expect(chatInputSource.includes("previousState !== 'active' && permissionBlockedRef.current"), 'returning from system settings must release the blocked permission UI for a fresh check');
 expect(chatInputSource.includes('updateVoiceGestureVisual({'), 'chat capture must publish to the root voice visual layer');
+expect(chatInputSource.includes('finalizeNativeVoiceCapture(capture)'), 'failed convert-to-text must retain the local recording for retry');
+expect(chatInputSource.includes('retryableTranscriptionRef.current = retainedCapture'), 'failed convert-to-text must expose a retryable capture instead of discarding it');
 expect(voiceOverlaySource.includes('meteringHistory: number[];'), 'voice visual layer must keep a rolling metering history');
 expect(voiceOverlaySource.includes("slice(-18)"), 'voice visual layer must retain exactly 18 recent metering samples');
 expect(!voiceOverlaySource.includes('waveformBars'), 'voice visual layer must not fall back to a fixed decorative waveform');
+expect(voiceOverlaySource.includes('animate={{ scaleY: Math.max(0.14, sample) }}'), 'recording waveform motion must use transform animation instead of repeated layout height changes');
 expect(voiceOverlaySource.includes('pointerEvents="none"'), 'root voice visual layer must remain read-only for the active responder');
 expect(!voiceOverlaySource.includes('<Modal'), 'voice visual layer must not interrupt recording through a React Native Modal');
 expect(voiceOverlaySource.includes('callOverlay.show'), 'voice visual layer must yield to the active call overlay');

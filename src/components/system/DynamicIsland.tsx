@@ -285,7 +285,7 @@ export function DynamicIsland({ compact: compactOverride }: DynamicIslandProps =
   const presentationKey = callNotification
     ? `call-${callOverlay.startedAt || callOverlay.characterId || callOverlay.type}`
     : recordingNotification
-      ? `recording-${recording?.phase}`
+      ? 'recording-session'
       : ordinaryNotification
         ? `notification-${ordinaryNotification.title}-${ordinaryNotification.desc}-${ordinaryNotification.status || 'idle'}`
         : 'idle';
@@ -297,11 +297,13 @@ export function DynamicIsland({ compact: compactOverride }: DynamicIslandProps =
   const targetRadius = targetHeight / 2;
   const titleColor = neumorphic ? neumorphicPalette.onLightPrimary : '#FFF7F0';
   const descColor = neumorphic ? neumorphicPalette.onLightSecondary : 'rgba(255, 235, 230, 0.72)';
-  const islandTransition = reducedMotion
-    ? { type: 'timing' as const, duration: 120 }
-    : notification
-      ? { type: 'spring' as const, damping: 20, stiffness: 210, mass: 0.8 }
-      : { type: 'spring' as const, damping: 24, stiffness: 250, mass: 0.78 };
+  const islandTransition = {
+    type: 'timing' as const,
+    duration: reducedMotion ? 100 : notification ? 180 : 160,
+  };
+  const notificationCopyKey = recordingNotification
+    ? `recording-copy-${recording?.phase}`
+    : `${notification?.title || 'idle'}-${notification?.desc || ''}`;
 
   return (
     <View
@@ -422,18 +424,34 @@ export function DynamicIsland({ compact: compactOverride }: DynamicIslandProps =
             }}
           >
             <NotificationIcon notification={notification} neumorphic={neumorphic} />
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ color: titleColor, fontSize: 14, fontWeight: '800' }}>
-                {notification.title}
-              </Text>
-              <Text numberOfLines={1} style={{ color: descColor, fontSize: 12.5, marginTop: 1 }}>
-                {notification.desc}
-              </Text>
-              <IslandActivity
-                status={notification.status}
-                neumorphic={neumorphic}
-                reducedMotion={reducedMotion}
-              />
+            <View style={{ flex: 1, minWidth: 0, height: 44, justifyContent: 'center' }}>
+              <View style={{ height: 31, position: 'relative', overflow: 'hidden' }}>
+                <AnimatePresence>
+                  <MotiView
+                    key={notificationCopyKey}
+                    from={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ type: 'timing', duration: reducedMotion ? 80 : 150 }}
+                    exitTransition={{ type: 'timing', duration: reducedMotion ? 70 : 120 }}
+                    style={StyleSheet.absoluteFillObject}
+                  >
+                    <Text numberOfLines={1} style={{ color: titleColor, fontSize: 14, lineHeight: 16, fontWeight: '800' }}>
+                      {notification.title}
+                    </Text>
+                    <Text numberOfLines={1} style={{ color: descColor, fontSize: 12.5, lineHeight: 15, marginTop: 0 }}>
+                      {notification.desc}
+                    </Text>
+                  </MotiView>
+                </AnimatePresence>
+              </View>
+              <View style={{ height: 11, justifyContent: 'flex-end' }}>
+                <IslandActivity
+                  status={notification.status}
+                  neumorphic={neumorphic}
+                  reducedMotion={reducedMotion}
+                />
+              </View>
             </View>
           </MotiView>
         ) : null}

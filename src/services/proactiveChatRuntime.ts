@@ -2,6 +2,7 @@ import type {
   Character,
   ProactiveChatSchedule,
   ProactiveChatSchedules,
+  ProactiveMessagingFrequency,
   RelationshipTrace,
 } from '../types';
 import {
@@ -15,6 +16,63 @@ export const PROACTIVE_INTERACTION_DELAY_MIN_MS = 6 * HOUR_MS;
 export const PROACTIVE_INTERACTION_DELAY_MAX_MS = 10 * HOUR_MS;
 export const PROACTIVE_SENT_DELAY_MIN_MS = 18 * HOUR_MS;
 export const PROACTIVE_SENT_DELAY_MAX_MS = 30 * HOUR_MS;
+export const PROACTIVE_INTERACTION_QUIET_MS = 90 * 60 * 1_000;
+
+interface ProactiveFrequencyWindow {
+  interactionMinimumMs: number;
+  interactionMaximumMs: number;
+  quietAfterInteractionMs: number;
+  sentMinimumMs: number;
+  sentMaximumMs: number;
+}
+
+export const PROACTIVE_FREQUENCY_WINDOWS: Record<
+  Exclude<ProactiveMessagingFrequency, 'off'>,
+  ProactiveFrequencyWindow
+> = {
+  occasional: {
+    interactionMinimumMs: 10 * HOUR_MS,
+    interactionMaximumMs: 16 * HOUR_MS,
+    quietAfterInteractionMs: 2 * HOUR_MS,
+    sentMinimumMs: 36 * HOUR_MS,
+    sentMaximumMs: 60 * HOUR_MS,
+  },
+  normal: {
+    interactionMinimumMs: PROACTIVE_INTERACTION_DELAY_MIN_MS,
+    interactionMaximumMs: PROACTIVE_INTERACTION_DELAY_MAX_MS,
+    quietAfterInteractionMs: PROACTIVE_INTERACTION_QUIET_MS,
+    sentMinimumMs: PROACTIVE_SENT_DELAY_MIN_MS,
+    sentMaximumMs: PROACTIVE_SENT_DELAY_MAX_MS,
+  },
+  frequent: {
+    interactionMinimumMs: 3 * HOUR_MS,
+    interactionMaximumMs: 6 * HOUR_MS,
+    quietAfterInteractionMs: 45 * 60 * 1_000,
+    sentMinimumMs: 8 * HOUR_MS,
+    sentMaximumMs: 14 * HOUR_MS,
+  },
+};
+
+export const resolveProactiveMessagingFrequency = (
+  character: Pick<Character, 'proactiveMessagingEnabled' | 'proactiveMessagingFrequency'>,
+): ProactiveMessagingFrequency => {
+  if (
+    character.proactiveMessagingEnabled === false
+    || character.proactiveMessagingFrequency === 'off'
+  ) {
+    return 'off';
+  }
+  return character.proactiveMessagingFrequency === 'occasional'
+    || character.proactiveMessagingFrequency === 'frequent'
+    ? character.proactiveMessagingFrequency
+    : 'normal';
+};
+
+const activeFrequencyWindow = (
+  frequency: ProactiveMessagingFrequency | undefined,
+) => PROACTIVE_FREQUENCY_WINDOWS[frequency === 'occasional' || frequency === 'frequent'
+  ? frequency
+  : 'normal'];
 
 const stableHash = (value: string) => {
   let hash = 2_166_136_261;
@@ -40,15 +98,16 @@ const deterministicDelay = (
 export const createInitialProactiveSchedule = (
   characterId: string,
   now = Date.now(),
+  frequency: ProactiveMessagingFrequency = 'normal',
 ): ProactiveChatSchedule => ({
   characterId,
   lastInteractionAt: now,
   nextDueAt: now + deterministicDelay(
     characterId,
     now,
-    PROACTIVE_INTERACTION_DELAY_MIN_MS,
-    PROACTIVE_INTERACTION_DELAY_MAX_MS,
-    'initial',
+    activeFrequencyWindow(frequency).interactionMinimumMs,
+    activeFrequencyWindow(frequency).interactionMaximumMs,
+    `initial:${frequency}`,
   ),
 });
 
@@ -56,38 +115,54 @@ export const rescheduleProactiveAfterInteraction = (
   current: ProactiveChatSchedule | undefined,
   characterId: string,
   now = Date.now(),
-): ProactiveChatSchedule => ({
-  ...current,
-  characterId,
-  lastInteractionAt: now,
-  nextDueAt: now + deterministicDelay(
+  frequency: ProactiveMessagingFrequency = 'normal',
+): ProactiveChatSchedule => {
+  const window = activeFrequencyWindow(frequency);
+  const targetDueAt = now + deterministicDelay(
     characterId,
     now,
-    PROACTIVE_INTERACTION_DELAY_MIN_MS,
-    PROACTIVE_INTERACTION_DELAY_MAX_MS,
-    'interaction',
-  ),
-});
+    window.interactionMinimumMs,
+    window.interactionMaximumMs,
+    `interaction:${frequency}`,
+  );
+  const quietBoundary = now + window.quietAfterInteractionMs;
+  const preservedDueAt = current && current.nextDueAt > 0
+    ? Math.min(current.nextDueAt, targetDueAt)
+    : targetDueAt;
+
+  return {
+    ...current,
+    characterId,
+    lastInteractionAt: now,
+    // A real conversation creates a quiet window, but it no longer throws away
+    // an earlier scheduled turn every time an active relationship speaks.
+    nextDueAt: Math.max(quietBoundary, preservedDueAt),
+  };
+};
 
 export const rescheduleAfterProactiveMessage = (
   current: ProactiveChatSchedule,
   characterId: string,
   now = Date.now(),
   contextTraceId?: string,
-): ProactiveChatSchedule => ({
-  ...current,
-  characterId,
-  lastSentAt: now,
-  lastReason: contextTraceId ? 'eventFollowUp' : 'quietReconnect',
-  ...(contextTraceId ? { lastContextTraceId: contextTraceId } : {}),
-  nextDueAt: now + deterministicDelay(
+  frequency: ProactiveMessagingFrequency = 'normal',
+): ProactiveChatSchedule => {
+  const window = activeFrequencyWindow(frequency);
+  return {
+    ...current,
+    characterId,
+    lastSentAt: now,
+    lastReason: contextTraceId ? 'eventFollowUp' : 'quietReconnect',
+    ...(contextTraceId ? { lastContextTraceId: contextTraceId } : {}),
+    nextDueAt: now + deterministicDelay(
     characterId,
     now,
-    PROACTIVE_SENT_DELAY_MIN_MS,
-    PROACTIVE_SENT_DELAY_MAX_MS,
-    'sent',
-  ),
-});
+      window.sentMinimumMs,
+      window.sentMaximumMs,
+      `sent:${frequency}`,
+    ),
+  };
+};
 
 const isFiniteTimestamp = (value: unknown): value is number => (
   typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -160,9 +235,10 @@ export const selectDueProactiveCandidate = ({
   return characters
     .filter(character => {
       const schedule = schedules[character.id];
+      const frequency = resolveProactiveMessagingFrequency(character);
       return friendIds.has(character.id)
         && !blockedIds.has(character.id)
-        && character.proactiveMessagingEnabled !== false
+        && frequency !== 'off'
         && !pendingChatRequests[character.id]
         && !!schedule
         && schedule.nextDueAt <= now
@@ -182,6 +258,7 @@ interface CreateLocalProactiveMessageInput {
   continuitySummary?: string;
   language?: string;
   now?: number;
+  timeZone?: string;
 }
 
 const conciseExcerpt = (value: string, maxLength: number) => {
@@ -197,6 +274,25 @@ const resolvePersonaTone = (description: string) => {
   if (/(stoic|quiet|reserved|disciplined|冷静|寡言|克制|严肃)/iu.test(description)) return 'reserved';
   if (/(witty|playful|free-spirited|charming|活泼|俏皮|自由|幽默)/iu.test(description)) return 'playful';
   return 'neutral';
+};
+
+export const resolveLocalHour = (now: number, timeZone?: string) => {
+  if (!timeZone?.trim()) return new Date(now).getHours();
+  try {
+    const hour = new Intl.DateTimeFormat('en-US-u-nu-latn', {
+      timeZone: timeZone.trim(),
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(now))
+      .find(part => part.type === 'hour')
+      ?.value;
+    const parsed = Number(hour);
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 23
+      ? parsed
+      : new Date(now).getHours();
+  } catch {
+    return new Date(now).getHours();
+  }
 };
 
 export const selectProactiveFocusEvent = (
@@ -225,9 +321,10 @@ export const createLocalProactiveMessage = ({
   continuitySummary,
   language,
   now = Date.now(),
+  timeZone,
 }: CreateLocalProactiveMessageInput): string => {
   const isChinese = language?.toLowerCase().startsWith('zh') ?? false;
-  const hour = new Date(now).getHours();
+  const hour = resolveLocalHour(now, timeZone);
   const period = hour < 11 ? 'morning' : hour < 18 ? 'day' : 'evening';
   const tone = resolvePersonaTone(personaDescription);
   const variant = stableHash(`${characterId}:${characterName || ''}:${tone}:${period}:${Math.floor(now / (24 * HOUR_MS))}`) % 3;

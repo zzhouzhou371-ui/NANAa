@@ -1,5 +1,5 @@
 export type AiProviderCapability = 'text' | 'vision' | 'stt' | 'tts';
-export type AiProviderKind = 'officialGemini' | 'openAICompatible';
+export type AiProviderKind = 'officialGemini' | 'officialMossland' | 'openAICompatible';
 export type CapabilityStatus = 'ready' | 'disabled' | 'unconfigured' | 'unsupported' | 'invalid';
 
 export interface ProviderCapabilityEndpoint {
@@ -39,6 +39,12 @@ const DEFAULT_MODELS: Record<AiProviderKind, Record<AiProviderCapability, string
     stt: 'gemini-2.5-flash',
     tts: '',
   },
+  officialMossland: {
+    text: '',
+    vision: '',
+    stt: 'moss-transcribe',
+    tts: 'moss-tts',
+  },
   openAICompatible: {
     text: '',
     vision: '',
@@ -59,9 +65,10 @@ export function inferAiProviderKind(apiUrl: unknown): AiProviderKind {
   const normalized = normalizeUrl(apiUrl);
   if (!normalized) return 'officialGemini';
   try {
-    return new URL(normalized).hostname.toLowerCase() === 'generativelanguage.googleapis.com'
-      ? 'officialGemini'
-      : 'openAICompatible';
+    const hostname = new URL(normalized).hostname.toLowerCase();
+    if (hostname === 'generativelanguage.googleapis.com') return 'officialGemini';
+    if (hostname === 'api.mosi.cn') return 'officialMossland';
+    return 'openAICompatible';
   } catch {
     return 'openAICompatible';
   }
@@ -78,6 +85,7 @@ export function normalizeProviderCapabilityEndpoint(
   const inferredProvider = inferAiProviderKind(apiUrl);
   const requestedProvider = source.provider ?? fallbackSource.provider;
   const provider: AiProviderKind = requestedProvider === 'officialGemini'
+    || requestedProvider === 'officialMossland'
     || requestedProvider === 'openAICompatible'
     ? requestedProvider
     : inferredProvider;
@@ -135,7 +143,11 @@ export function createLegacyProviderCapabilitySettings(input: {
 const runtimeSupports = (
   capability: AiProviderCapability,
   provider: AiProviderKind,
-) => !(capability === 'tts' && provider === 'officialGemini');
+) => {
+  if (provider === 'officialGemini') return capability !== 'tts';
+  if (provider === 'officialMossland') return capability === 'stt' || capability === 'tts';
+  return true;
+};
 
 export function diagnoseProviderCapability(
   capability: AiProviderCapability,
@@ -202,10 +214,13 @@ export function diagnoseProviderCapability(
         warnings,
       };
     }
-    const isGeminiHost = parsed.hostname.toLowerCase() === 'generativelanguage.googleapis.com';
+    const hostname = parsed.hostname.toLowerCase();
+    const isGeminiHost = hostname === 'generativelanguage.googleapis.com';
+    const isMosslandHost = hostname === 'api.mosi.cn';
     if (
       (endpoint.provider === 'officialGemini' && !isGeminiHost)
-      || (endpoint.provider === 'openAICompatible' && isGeminiHost)
+      || (endpoint.provider === 'officialMossland' && !isMosslandHost)
+      || (endpoint.provider === 'openAICompatible' && (isGeminiHost || isMosslandHost))
     ) {
       return {
         capability,

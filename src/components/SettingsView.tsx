@@ -12,7 +12,12 @@ import {
   usesNativeSecretStorage,
 } from '../services/secretStore';
 import { requestProactiveNotificationPermission } from '../services/proactiveNotificationRuntime';
-import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
+import {
+  MOSSLAND_API_URL,
+  MOSSLAND_STT_MODEL,
+  MOSSLAND_TTS_MODEL,
+  resolveVoiceProvider,
+} from '../services/voiceProviderRuntime';
 import { AnimatedPressable } from './primitives';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 
@@ -101,6 +106,7 @@ export function SettingsView() {
   const tempVoiceTtsModel = useNanaStore(s => s.tempVoiceTtsModel);
   const autoTTS = useNanaStore(s => s.autoTTS);
   const speechLanguage = useNanaStore(s => s.speechLanguage);
+  const language = useNanaStore(s => s.themeConfig.language);
   const set = useNanaStore.setState;
   const [isSavingApi, setIsSavingApi] = useState(false);
   const [isChangingNotifications, setIsChangingNotifications] = useState(false);
@@ -117,6 +123,7 @@ export function SettingsView() {
     chatApiKey: tempApiKey,
     chatModel: selectedModel,
   });
+  const mosslandVoiceSelected = voiceProvider.stt.provider === 'officialMossland';
 
   const handleSaveApiConfig = async () => {
     setIsSavingApi(true);
@@ -159,13 +166,21 @@ export function SettingsView() {
 
   const persistVoiceSettings = async (showAlert: boolean) => {
     const voiceApiKey = await saveVoiceApiKey(tempVoiceApiKey);
+    const sttModel = mosslandVoiceSelected
+      ? MOSSLAND_STT_MODEL
+      : tempVoiceSttModel.trim() || 'gpt-4o-mini-transcribe';
+    const ttsModel = mosslandVoiceSelected
+      ? MOSSLAND_TTS_MODEL
+      : tempVoiceTtsModel.trim() || 'tts-1';
     set({
       voiceProviderEnabled,
       voiceApiUrl: tempVoiceApiUrl.trim(),
       voiceApiKey,
-      voiceSttModel: tempVoiceSttModel.trim() || 'gpt-4o-mini-transcribe',
-      voiceTtsModel: tempVoiceTtsModel.trim() || 'tts-1',
+      voiceSttModel: sttModel,
+      voiceTtsModel: ttsModel,
       tempVoiceApiKey: voiceApiKey,
+      tempVoiceSttModel: sttModel,
+      tempVoiceTtsModel: ttsModel,
     });
     setVoiceStatus(t.voiceSettingsSaved);
     if (showAlert) Alert.alert(t.voiceService, t.voiceSettingsSaved);
@@ -382,11 +397,25 @@ export function SettingsView() {
 
           {voiceProviderEnabled ? (
             <View>
+              <View style={{ marginBottom: 14 }}>
+                <SettingsButton
+                  label={language === 'zh' ? '使用 Mossland 语音服务' : 'Use Mossland voice service'}
+                  onPress={() => {
+                    set({
+                      tempVoiceApiUrl: MOSSLAND_API_URL,
+                      tempVoiceSttModel: MOSSLAND_STT_MODEL,
+                      tempVoiceTtsModel: MOSSLAND_TTS_MODEL,
+                    });
+                  }}
+                  tone={mosslandVoiceSelected ? 'pinkGold' : 'lavender'}
+                  disabled={isSavingVoice}
+                />
+              </View>
               <SettingsField
                 label={t.voiceApiUrl}
                 value={tempVoiceApiUrl}
                 onChangeText={value => set({ tempVoiceApiUrl: value })}
-                placeholder="https://api.openai.com"
+                placeholder={mosslandVoiceSelected ? MOSSLAND_API_URL : 'https://api.openai.com'}
               />
               <SettingsField
                 label={t.voiceApiKey}
@@ -399,14 +428,21 @@ export function SettingsView() {
                 label={t.voiceSttModel}
                 value={tempVoiceSttModel}
                 onChangeText={value => set({ tempVoiceSttModel: value })}
-                placeholder="gpt-4o-mini-transcribe"
+                placeholder={mosslandVoiceSelected ? MOSSLAND_STT_MODEL : 'gpt-4o-mini-transcribe'}
               />
               <SettingsField
                 label={t.voiceTtsModel}
                 value={tempVoiceTtsModel}
                 onChangeText={value => set({ tempVoiceTtsModel: value })}
-                placeholder="tts-1"
+                placeholder={mosslandVoiceSelected ? MOSSLAND_TTS_MODEL : 'tts-1'}
               />
+              {mosslandVoiceSelected ? (
+                <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 11.5, lineHeight: 17, marginBottom: 14 }}>
+                  {language === 'zh'
+                    ? '聊天语音使用普通合成；角色音色请在角色资料里填写 Mossland voice_id。流式语音会留给实时通话。'
+                    : 'Chat voice uses standard synthesis. Set each character’s Mossland voice_id in their profile; streaming is reserved for live calls.'}
+                </Text>
+              ) : null}
             </View>
           ) : null}
 

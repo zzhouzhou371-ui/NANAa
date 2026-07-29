@@ -6,7 +6,13 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Heart, MessageCircle, Send } from 'lucide-react-native';
+import {
+  Heart,
+  ImagePlus,
+  MessageCircle,
+  RotateCcw,
+  Send,
+} from 'lucide-react-native';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Moment, MomentComment } from '../types';
 import { AnimatedPressable } from './primitives';
@@ -16,6 +22,17 @@ import {
 } from './neumorphic-surface';
 import { wechatAssets } from './wechatAssets';
 import { CharacterPortrait } from './CharacterPortrait';
+import {
+  cleanupReplacedWallpaper,
+  pickMomentsCoverFromLibrary,
+} from '../services/nativeImagePickerRuntime';
+import {
+  DEFAULT_MOMENTS_COVER_VALUE,
+  isUserSocialAuthor,
+  momentsCoverUsesBundledDefault,
+  normalizeMomentsCoverValue,
+  resolveMomentSocialIdentity,
+} from '../services/socialIdentityRuntime';
 
 interface AddMomentCommentInput {
   text: string;
@@ -47,11 +64,22 @@ export function MomentsView({
   const storedMoments = useNanaStore(s => s.momentsList);
   const myName = useNanaStore(s => s.myName);
   const myAvatar = useNanaStore(s => s.myAvatar);
+  const momentsBg = useNanaStore(s => s.momentsBg);
+  const setMomentsCover = useNanaStore(s => s.setMomentsCover);
+  const resetMomentsCover = useNanaStore(s => s.resetMomentsCover);
   const language = useNanaStore(s => s.themeConfig.language);
   const [activeComposer, setActiveComposer] = useState<ActiveComposer | null>(null);
   const [commentDraft, setCommentDraft] = useState('');
-  const momentsList = moments ?? storedMoments;
+  const [coverPickerBusy, setCoverPickerBusy] = useState(false);
+  const momentsList = (moments ?? storedMoments).map(moment => (
+    resolveMomentSocialIdentity(moment, {
+      name: myName || (language === 'zh' ? '我' : 'Me'),
+      avatar: myAvatar,
+    })
+  ));
   const isChinese = language === 'zh';
+  const normalizedCover = normalizeMomentsCoverValue(momentsBg);
+  const bundledCover = momentsCoverUsesBundledDefault(normalizedCover);
   const copy = useMemo(() => ({
     like: isChinese ? '赞' : 'Like',
     unlike: isChinese ? '取消赞' : 'Unlike',
@@ -63,7 +91,61 @@ export function MomentsView({
     noMomentsHint: isChinese
       ? '角色和你的新动态会留在这里。'
       : 'New posts from you and your characters will stay here.',
+    changeCover: isChinese ? '从相册更换朋友圈封面' : 'Choose Moments cover from photos',
+    resetCover: isChinese ? '恢复默认朋友圈封面' : 'Restore default Moments cover',
+    coverUpdated: isChinese ? '朋友圈封面已更新' : 'Moments cover updated',
+    coverReset: isChinese ? '已恢复默认封面' : 'Default cover restored',
+    coverFailed: isChinese ? '无法更换朋友圈封面' : 'Could not update Moments cover',
   }), [isChinese]);
+
+  const handleChooseCover = async () => {
+    if (coverPickerBusy) return;
+    setCoverPickerBusy(true);
+    try {
+      const result = await pickMomentsCoverFromLibrary();
+      if (result.canceled) return;
+      if (result.phase !== 'ready' || !result.localUri) {
+        useNanaStore.setState({
+          islandNotification: {
+            title: copy.coverFailed,
+            desc: result.errorMessage || copy.coverFailed,
+            status: 'error',
+          },
+        });
+        return;
+      }
+      const previousCover = normalizeMomentsCoverValue(
+        useNanaStore.getState().momentsBg,
+      );
+      setMomentsCover(result.localUri);
+      cleanupReplacedWallpaper(previousCover, result.localUri);
+      useNanaStore.setState({
+        islandNotification: {
+          title: copy.coverUpdated,
+          desc: copy.coverUpdated,
+          status: 'success',
+        },
+      });
+    } finally {
+      setCoverPickerBusy(false);
+      setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2200);
+    }
+  };
+
+  const handleResetCover = () => {
+    const state = useNanaStore.getState();
+    const previousCover = normalizeMomentsCoverValue(state.momentsBg);
+    resetMomentsCover();
+    cleanupReplacedWallpaper(previousCover, DEFAULT_MOMENTS_COVER_VALUE);
+    useNanaStore.setState({
+      islandNotification: {
+        title: copy.coverReset,
+        desc: copy.coverReset,
+        status: 'success',
+      },
+    });
+    setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2200);
+  };
 
   const toggleLike = (moment: Moment) => {
     if (onToggleLike) {
@@ -75,11 +157,11 @@ export function MomentsView({
       momentsList: state.momentsList.map(item => {
         if (item.id !== moment.id) return item;
         const likes = item.likes || [];
-        const alreadyLiked = likes.some(like => like.authorId === currentUserId);
+        const alreadyLiked = likes.some(like => isUserSocialAuthor(like.authorId));
         return {
           ...item,
           likes: alreadyLiked
-            ? likes.filter(like => like.authorId !== currentUserId)
+            ? likes.filter(like => !isUserSocialAuthor(like.authorId))
             : [
                 ...likes,
                 {
@@ -165,7 +247,7 @@ export function MomentsView({
     >
       <View style={{ marginHorizontal: 3, borderRadius: 20, overflow: 'hidden' }}>
         <ExpoImage
-          source={wechatAssets.momentsCover}
+          source={bundledCover ? wechatAssets.momentsCover : { uri: normalizedCover }}
           contentFit="cover"
           transition={160}
           style={{ width: '100%', height: 142 }}
@@ -182,6 +264,53 @@ export function MomentsView({
             backgroundColor: 'rgba(42,31,54,0.16)',
           }}
         />
+        <View
+          style={{
+            position: 'absolute',
+            right: 8,
+            bottom: 8,
+            flexDirection: 'row',
+            gap: 7,
+          }}
+        >
+          <AnimatedPressable
+            testID="moments-change-cover"
+            accessibilityRole="button"
+            accessibilityLabel={copy.changeCover}
+            accessibilityState={{ busy: coverPickerBusy }}
+            disabled={coverPickerBusy}
+            onPress={() => { void handleChooseCover(); }}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 15,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(48,37,55,0.78)',
+              opacity: coverPickerBusy ? 0.6 : 1,
+            }}
+          >
+            <ImagePlus size={18} color={neumorphicPalette.onBerry} />
+          </AnimatedPressable>
+          {!bundledCover ? (
+            <AnimatedPressable
+              testID="moments-reset-cover"
+              accessibilityRole="button"
+              accessibilityLabel={copy.resetCover}
+              onPress={handleResetCover}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 15,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'rgba(48,37,55,0.78)',
+              }}
+            >
+              <RotateCcw size={17} color={neumorphicPalette.onBerry} />
+            </AnimatedPressable>
+          ) : null}
+        </View>
       </View>
 
       <View style={{ paddingHorizontal: 3, paddingTop: 16 }}>
@@ -205,7 +334,7 @@ export function MomentsView({
         {momentsList.map(moment => {
           const likes = moment.likes || [];
           const comments = moment.comments || [];
-          const likedByMe = likes.some(like => like.authorId === 'me');
+          const likedByMe = likes.some(like => isUserSocialAuthor(like.authorId));
           const composerOpen = activeComposer?.momentId === moment.id;
           return (
             <NeumorphicSurface

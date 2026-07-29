@@ -237,12 +237,14 @@ expect(
 expect(storeSource.includes('normalizeProactiveChatSchedules(state.proactiveChatSchedules)'), 'persisted schedules must pass through migration validation');
 expect(storeSource.includes('rescheduleProactiveAfterInteraction('), 'real chat activity must postpone proactive outreach');
 expect(
-  storeSource.includes('setCharacterProactiveMessagingEnabled: (characterId, enabled)'),
-  'the store must expose an atomic character-level opt-in action',
+  storeSource.includes('setCharacterProactiveMessagingFrequency: (characterId, frequency)'),
+  'the store must expose an atomic character-level frequency action',
 );
 expect(
-  storeSource.includes('proactiveMessagingEnabled: value.proactiveMessagingEnabled !== false'),
-  'legacy characters must migrate to the enabled default',
+  storeSource.includes("value.proactiveMessagingEnabled === false")
+    && storeSource.includes("? 'off'")
+    && storeSource.includes(": 'normal'"),
+  'legacy characters must migrate from the boolean setting to off or normal cadence',
 );
 
 const layoutSource = readFileSync(resolve(root, 'src/app/_layout.tsx'), 'utf8');
@@ -257,12 +259,14 @@ const storageSource = readFileSync(resolve(root, 'src/services/storage.ts'), 'ut
 expect(storageSource.includes("'proactiveChatSchedules'"), 'portable storage must allow validated proactive schedules');
 
 const profileSource = readFileSync(resolve(root, 'src/components/ProfileView.tsx'), 'utf8');
-expect(profileSource.includes('<Switch'), 'the online character profile must expose a native proactive-message switch');
 expect(
-  profileSource.includes('setCharacterProactiveMessagingEnabled(char.id, enabled)'),
-  'the profile switch must use the persisted character action',
+  profileSource.includes("['off',")
+    && profileSource.includes("['occasional',")
+    && profileSource.includes("['normal',")
+    && profileSource.includes("['frequent',")
+    && profileSource.includes('setCharacterProactiveMessagingFrequency(char.id, frequency)'),
+  'the online character profile must expose all four proactive-message cadence choices',
 );
-
 const aiSource = readFileSync(resolve(root, 'src/services/ai.ts'), 'utf8');
 expect(aiSource.includes('export async function generateProactiveReply'), 'AI service must own proactive generation');
 expect(

@@ -35,16 +35,23 @@ const idleSharedVoiceSnapshot: SharedVoicePlaybackSnapshot = {
 let sharedVoicePlayer: AudioPlayer | null = null;
 let sharedVoicePlayerSubscription: { remove: () => void } | null = null;
 let sharedVoiceSnapshot = idleSharedVoiceSnapshot;
-const sharedVoiceListeners = new Set<() => void>();
+const sharedVoiceListeners = new Set<{
+  audioUri?: string;
+  listener: () => void;
+}>();
 
 const emitSharedVoiceSnapshot = (next: SharedVoicePlaybackSnapshot) => {
+  const previousUri = sharedVoiceSnapshot.uri;
   sharedVoiceSnapshot = next;
-  for (const listener of sharedVoiceListeners) listener();
+  for (const entry of sharedVoiceListeners) {
+    if (entry.audioUri === previousUri || entry.audioUri === next.uri) entry.listener();
+  }
 };
 
-const subscribeSharedVoicePlayback = (listener: () => void) => {
-  sharedVoiceListeners.add(listener);
-  return () => sharedVoiceListeners.delete(listener);
+const subscribeSharedVoicePlayback = (audioUri: string | undefined, listener: () => void) => {
+  const entry = { audioUri, listener };
+  sharedVoiceListeners.add(entry);
+  return () => sharedVoiceListeners.delete(entry);
 };
 
 const releaseSharedVoicePlayer = () => {
@@ -65,7 +72,10 @@ const releaseSharedVoicePlayer = () => {
 const ensureSharedVoicePlayer = (audioUri: string) => {
   if (sharedVoicePlayer && sharedVoiceSnapshot.uri === audioUri) return sharedVoicePlayer;
   releaseSharedVoicePlayer();
-  const player = createAudioPlayer({ uri: audioUri });
+  const player = createAudioPlayer(
+    { uri: audioUri },
+    { updateInterval: 120 },
+  );
   sharedVoicePlayer = player;
   emitSharedVoiceSnapshot({
     ...idleSharedVoiceSnapshot,
@@ -80,19 +90,22 @@ const ensureSharedVoicePlayer = (audioUri: string) => {
       duration: Number.isFinite(status.duration) ? Math.max(0, status.duration) : 0,
       didJustFinish: status.didJustFinish,
     });
-    if (status.didJustFinish) {
-      setTimeout(() => {
-        if (sharedVoicePlayer === player) releaseSharedVoicePlayer();
-      }, 0);
-    }
   });
   return player;
 };
 
 export function useNativeVoicePlayback(audioUri?: string): NativeVoicePlaybackController {
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeSharedVoicePlayback(audioUri, listener),
+    [audioUri],
+  );
+  const getSnapshot = useCallback(
+    () => sharedVoiceSnapshot.uri === audioUri ? sharedVoiceSnapshot : idleSharedVoiceSnapshot,
+    [audioUri],
+  );
   const status = useSyncExternalStore(
-    subscribeSharedVoicePlayback,
-    () => sharedVoiceSnapshot,
+    subscribe,
+    getSnapshot,
     () => idleSharedVoiceSnapshot,
   );
   const canPlay = !!audioUri && (Platform.OS === 'ios' || Platform.OS === 'android' || Platform.OS === 'web');
