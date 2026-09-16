@@ -4,6 +4,7 @@ import { useNanaStore } from '../stores/nanaStore';
 import { GradientButton, NativeGradient } from './primitives';
 import { wechatTheme } from './wechatTheme';
 import { CharacterPortrait } from './CharacterPortrait';
+import { createAddFriendPatch } from '../services/friendshipRuntime';
 
 export function AddFriendOverlay() {
   const { t } = useApp();
@@ -33,7 +34,10 @@ export function AddFriendOverlay() {
             </View>
             <GradientButton
               variant="primary"
-              onPress={() => set(s => ({ friends: [...s.friends, char.id], showAddFriend: false }))}
+              onPress={() => set(s => ({
+                ...createAddFriendPatch(s, char),
+                showAddFriend: false,
+              }))}
             >
               <Text className="text-[#5E5672] text-[13px] font-semibold">{t.add}</Text>
             </GradientButton>

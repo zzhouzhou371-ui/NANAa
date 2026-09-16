@@ -207,7 +207,7 @@ export function ComposeMomentOverlay({
                 <ExpoImage
                   source={{ uri: momentImageUrl }}
                   contentFit="cover"
-                  transition={120}
+                  transition={0}
                   cachePolicy="memory-disk"
                   style={{ width: '100%', height: '100%' }}
                   accessibilityLabel={t.chooseMomentPhoto}

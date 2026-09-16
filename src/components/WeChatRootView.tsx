@@ -1,4 +1,5 @@
-import { View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { ChatListView } from './ChatListView';
@@ -21,6 +22,8 @@ import type { StickerAsset, StickerScope } from '../types';
 export function WeChatRootView() {
   const { t } = useApp();
   const weChatPage = useNanaStore(s => s.weChatPage);
+  const activeChatId = useNanaStore(s => s.activeChatId);
+  const [retainedChatId, setRetainedChatId] = useState(activeChatId);
   const showAddFriend = useNanaStore(s => s.showAddFriend);
   const showComposeMoment = useNanaStore(s => s.showComposeMoment);
   const paymentModal = useNanaStore(s => s.paymentModal);
@@ -37,6 +40,13 @@ export function WeChatRootView() {
   const addStickers = useNanaStore(s => s.addStickers);
   const updateSticker = useNanaStore(s => s.updateSticker);
   const removeSticker = useNanaStore(s => s.removeSticker);
+
+  useEffect(() => {
+    if (activeChatId) setRetainedChatId(activeChatId);
+  }, [activeChatId]);
+
+  const renderedChatId = activeChatId || retainedChatId;
+  const chatVisible = weChatPage === 'chat' && !!activeChatId;
 
   const requestAddStickers = async (scope: StickerScope, characterId?: string) => {
     if (scope === 'relationship' && !characterId) return;
@@ -104,8 +114,23 @@ export function WeChatRootView() {
         pointerEvents={callIsActive ? 'none' : 'auto'}
         style={{ flex: 1, minHeight: 0 }}
       >
+        {renderedChatId ? (
+          <View
+            pointerEvents={chatVisible ? 'auto' : 'none'}
+            accessibilityElementsHidden={!chatVisible}
+            importantForAccessibility={chatVisible ? 'auto' : 'no-hide-descendants'}
+            style={[
+              StyleSheet.absoluteFillObject,
+              {
+                opacity: chatVisible ? 1 : 0,
+                zIndex: chatVisible ? 2 : 0,
+              },
+            ]}
+          >
+            <ChatView chatId={renderedChatId} />
+          </View>
+        ) : null}
         {weChatPage === 'root' && <ChatListView />}
-        {weChatPage === 'chat' && <ChatView />}
         {weChatPage === 'profile' && <ProfileView />}
         {weChatPage === 'moments' && (
           <MomentsView

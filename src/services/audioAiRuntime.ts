@@ -11,6 +11,11 @@ import {
   responseErrorMessage,
 } from './network';
 import { createWritableMediaFile } from './localMediaRepository';
+import { toSpeakableText } from './speakableText';
+import {
+  evaluateLocalVoiceTranscription,
+  type LocalVoiceTranscriptionRejection,
+} from './voiceTranscriptionGuard';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
 const OPENAI_STT_MODELS = ['gpt-4o-mini-transcribe', 'whisper-1'];
@@ -28,6 +33,7 @@ const OPENAI_VOICES = new Set([
 export type AudioAiErrorStage = 'input' | 'configuration' | 'request' | 'response' | 'decode' | 'storage';
 export type AudioAiCaptureResult = MediaCaptureResult & {
   errorStage?: AudioAiErrorStage;
+  errorCode?: LocalVoiceTranscriptionRejection;
 };
 
 const normalizeBaseUrl = (apiUrl: string) => (apiUrl || GEMINI_BASE_URL).replace(/\/+$/, '');
@@ -50,15 +56,21 @@ const isOfficialOpenAIBaseUrl = (baseUrl: string) => (
   hostnameIs(baseUrl, 'api.openai.com')
 );
 
-const mimeTypeForUri = (uri: string, fallback = 'audio/m4a') => {
+const mimeTypeForUri = (uri: string, fallback = 'audio/mp4') => {
   const lowered = uri.toLowerCase().split('?')[0];
   if (lowered.endsWith('.mp3')) return 'audio/mpeg';
   if (lowered.endsWith('.wav')) return 'audio/wav';
   if (lowered.endsWith('.aac')) return 'audio/aac';
   if (lowered.endsWith('.caf')) return 'audio/x-caf';
   if (lowered.endsWith('.webm')) return 'audio/webm';
-  if (lowered.endsWith('.mp4')) return 'audio/mp4';
+  if (lowered.endsWith('.m4a') || lowered.endsWith('.mp4')) return 'audio/mp4';
+  if (lowered.endsWith('.3gp') || lowered.endsWith('.3gpp')) return 'audio/3gpp';
   return fallback;
+};
+
+const usesUnsupportedAndroid3gpRecording = (uri: string) => {
+  const lowered = uri.toLowerCase().split(/[?#]/)[0];
+  return lowered.endsWith('.3gp') || lowered.endsWith('.3gpp');
 };
 
 const redactAudioAiError = (value: unknown, apiKey?: string) => {
@@ -82,6 +94,7 @@ const failedAudioAiCapture = (
   errorStage: AudioAiErrorStage,
   errorMessage: unknown,
   apiKey?: string,
+  errorCode?: LocalVoiceTranscriptionRejection,
 ): AudioAiCaptureResult => ({
   phase: 'failed',
   mediaKind: 'audio',
@@ -90,6 +103,7 @@ const failedAudioAiCapture = (
   durationSec: capture.durationSec,
   transcript: capture.transcript,
   errorStage,
+  errorCode,
   errorMessage: redactAudioAiError(errorMessage, apiKey) || 'Speech processing failed',
 });
 
@@ -290,11 +304,38 @@ async function transcribeAudioCaptureUnsafe(params: {
   selectedModel: string;
   language: string;
   sttModel?: string;
+  minimumDurationMillis?: number;
   signal?: AbortSignal;
 }): Promise<AudioAiCaptureResult> {
-  if (params.capture.phase === 'ready' && params.capture.transcript?.trim()) return params.capture;
   if (!params.capture.localUri) {
+    if (params.capture.phase === 'ready' && params.capture.transcript?.trim()) return params.capture;
     return failedAudioAiCapture(params.capture, 'input', 'No audio captured for transcription');
+  }
+  const localDecision = evaluateLocalVoiceTranscription(
+    params.capture,
+    params.minimumDurationMillis,
+  );
+  if (!localDecision.allowed) {
+    const chinese = params.language.toLowerCase().startsWith('zh');
+    const message = localDecision.rejection === 'audioTooShort'
+      ? (chinese ? '语音时间太短，请再说一次。' : 'The voice recording is too short. Please try again.')
+      : (chinese ? '没有听到清晰的声音，请再说一次。' : 'No clear speech was detected. Please try again.');
+    return failedAudioAiCapture(
+      params.capture,
+      'input',
+      message,
+      params.apiKey,
+      localDecision.rejection,
+    );
+  }
+  if (params.capture.phase === 'ready' && params.capture.transcript?.trim()) return params.capture;
+  if (usesUnsupportedAndroid3gpRecording(params.capture.localUri)) {
+    return failedAudioAiCapture(
+      params.capture,
+      'input',
+      'This 3GP recording cannot be transcribed. Record a new voice message and try again.',
+      params.apiKey,
+    );
   }
   if (!params.apiKey.trim()) {
     return failedAudioAiCapture(
@@ -366,6 +407,7 @@ export async function transcribeAudioCapture(params: {
   selectedModel: string;
   language: string;
   sttModel?: string;
+  minimumDurationMillis?: number;
   signal?: AbortSignal;
 }): Promise<AudioAiCaptureResult> {
   try {
@@ -575,9 +617,9 @@ async function synthesizeSpeechAudioUnsafe(params: {
   ttsModel?: string;
   signal?: AbortSignal;
 }): Promise<MediaCaptureResult> {
-  const text = params.text.trim().slice(0, MAX_TTS_TEXT_LENGTH);
+  const text = toSpeakableText(params.text).slice(0, MAX_TTS_TEXT_LENGTH);
   if (!text) {
-    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No text to synthesize' };
+    return { phase: 'failed', mediaKind: 'audio', errorMessage: 'No speakable text to synthesize' };
   }
   if (!params.apiKey.trim()) {
     return {

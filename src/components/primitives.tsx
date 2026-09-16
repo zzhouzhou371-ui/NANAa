@@ -1,7 +1,13 @@
-import React, { useState, type ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 import { StyleSheet, View, Text, Pressable, TextInput, type PressableProps, type ViewStyle, type StyleProp } from 'react-native';
-import { MotiView } from 'moti';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { crystalGlass, palette } from '../constants/design';
 
 // ── Types ──
@@ -18,6 +24,8 @@ const directionMap: Record<GradientDirection, { start: { x: number; y: number };
   'to-t':  { start: { x: 0, y: 1 }, end: { x: 0, y: 0 } },
   'to-tr': { start: { x: 0, y: 1 }, end: { x: 1, y: 0 } },
 };
+
+const PRESS_EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
 
 // ── AnimatedPressable ──
 
@@ -43,7 +51,7 @@ export function AnimatedPressable({
   onPressIn,
   onPressOut,
   disabled = false,
-  scale = 0.95,
+  scale = 0.98,
   children,
   style,
   className,
@@ -55,7 +63,12 @@ export function AnimatedPressable({
   accessibilityState,
   hitSlop = 4,
 }: AnimatedPressableProps) {
-  const [pressed, setPressed] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const pressedScale = Math.max(0.97, Math.min(1, scale));
+  const scaleValue = useSharedValue(1);
+  const animatedScaleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scaleValue.value }],
+  }));
   const classes = className?.split(/\s+/) ?? [];
   const flat = StyleSheet.flatten(style) || {};
   const wrapperStyle: StyleProp<ViewStyle> = [
@@ -118,10 +131,8 @@ export function AnimatedPressable({
   ];
 
   return (
-    <MotiView
-      animate={{ scale: pressed && !disabled ? scale : 1, opacity: pressed && !disabled ? 0.85 : 1 }}
-      transition={{ type: 'spring', damping: 18, stiffness: 350, mass: 0.6 }}
-      style={wrapperStyle}
+    <Animated.View
+      style={[wrapperStyle, animatedScaleStyle]}
     >
       <Pressable
         testID={testID}
@@ -132,8 +143,20 @@ export function AnimatedPressable({
         accessibilityState={accessibilityState ?? (disabled ? { disabled: true } : undefined)}
         onPress={onPress}
         onLongPress={onLongPress}
-        onPressIn={() => { setPressed(true); onPressIn?.(); }}
-        onPressOut={() => { setPressed(false); onPressOut?.(); }}
+        onPressIn={() => {
+          scaleValue.value = withTiming(
+            disabled || reducedMotion ? 1 : pressedScale,
+            { duration: reducedMotion ? 0 : 80, easing: PRESS_EASE_OUT },
+          );
+          onPressIn?.();
+        }}
+        onPressOut={() => {
+          scaleValue.value = withTiming(1, {
+            duration: reducedMotion ? 0 : 140,
+            easing: PRESS_EASE_OUT,
+          });
+          onPressOut?.();
+        }}
         disabled={disabled}
         style={pressableStyle}
         className={className}
@@ -141,7 +164,7 @@ export function AnimatedPressable({
       >
         {children}
       </Pressable>
-    </MotiView>
+    </Animated.View>
   );
 }
 
@@ -174,18 +197,20 @@ export function GradientButton({
   style,
 }: GradientButtonProps) {
   const colors = variantColors[variant];
-  const [pressed, setPressed] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const scaleValue = useSharedValue(1);
+  const animatedScaleStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scaleValue.value }],
+  }));
   const flattenedStyle = style as ViewStyle | undefined;
 
   return (
-    <MotiView
-      animate={{ scale: pressed && !disabled ? 0.95 : 1, opacity: pressed && !disabled ? 0.85 : 1 }}
-      transition={{ type: 'spring', damping: 18, stiffness: 350, mass: 0.6 }}
-      style={{
+    <Animated.View
+      style={[{
         flex: flattenedStyle?.flex,
         width: flattenedStyle?.width,
         alignSelf: flattenedStyle?.alignSelf,
-      }}
+      }, animatedScaleStyle]}
     >
       <LinearGradient
         colors={colors}
@@ -196,8 +221,18 @@ export function GradientButton({
         <Pressable
           onPress={onPress}
           disabled={disabled}
-          onPressIn={() => setPressed(true)}
-          onPressOut={() => setPressed(false)}
+          onPressIn={() => {
+            scaleValue.value = withTiming(
+              disabled || reducedMotion ? 1 : 0.98,
+              { duration: reducedMotion ? 0 : 80, easing: PRESS_EASE_OUT },
+            );
+          }}
+          onPressOut={() => {
+            scaleValue.value = withTiming(1, {
+              duration: reducedMotion ? 0 : 140,
+              easing: PRESS_EASE_OUT,
+            });
+          }}
           style={{
             flex: 1,
             paddingHorizontal: 20,
@@ -209,7 +244,7 @@ export function GradientButton({
           {children}
         </Pressable>
       </LinearGradient>
-    </MotiView>
+    </Animated.View>
   );
 }
 

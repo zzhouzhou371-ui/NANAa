@@ -1,5 +1,25 @@
 # Development Workflow
 
+## Preview OTA updates
+
+The installed Preview APK follows the `preview` EAS Update channel. After the
+first OTA-enabled Preview build is installed, JavaScript, TypeScript, styles,
+and bundled asset changes can be published without rebuilding the APK:
+
+```powershell
+npm run update:preview -- --message "Describe the change"
+```
+
+Force-close and reopen the Preview app after publishing. A non-development
+build downloads an available update in the background and applies it on the
+next launch.
+
+Create a new Preview APK instead when native compatibility changes, including
+adding or removing native packages, changing Expo config plugins or Android
+permissions, upgrading Expo/React Native, or changing native app assets. Bump
+the app version before that build so the `appVersion` runtime policy creates a
+new compatible OTA runtime.
+
 This document records the working process for Nana. Read it before a new
 implementation thread.
 

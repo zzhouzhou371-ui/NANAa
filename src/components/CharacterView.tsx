@@ -15,6 +15,7 @@ import {
 import { normalizeAvatarValue } from '../services/avatarValueRuntime';
 import { REMOTE_VOICE_PRESETS, resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
+import { createAddFriendPatch } from '../services/friendshipRuntime';
 
 const isImageAvatar = (avatar: string) => /^(https?:|data:|file:|content:|blob:)/.test(avatar.trim());
 const isLocalAvatar = (avatar: string) => /^(data:|file:|content:|blob:)/.test(avatar.trim());
@@ -395,7 +396,7 @@ export function CharacterView() {
               </View>
             ) : (
               <AnimatedPressable
-                onPress={() => set({ friends: [...useNanaStore.getState().friends, c.id] })}
+                onPress={() => set(state => createAddFriendPatch(state, c))}
                 style={{ minHeight: 36, borderRadius: 13 }}
               >
                 <NeumorphicSurface

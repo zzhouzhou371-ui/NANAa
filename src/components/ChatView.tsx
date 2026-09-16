@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard, Platform, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Platform, StyleSheet, View } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { useApp } from '../context/AppContext';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { useStableViewportMetrics } from '../hooks/useStableViewportMetrics';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Message, Payment, PaymentStatus } from '../types';
 import { forwardMessagesToMemory } from '../utils/memory';
@@ -11,12 +12,16 @@ import { ChatMessageBubble, TypingIndicator } from './ChatMessageBubble';
 import type { ChatBubbleMaterialVariant } from './chat-bubble-surface';
 import { NativeGradient } from './primitives';
 import { SelectModeBar } from './SelectModeBar';
+import { MeetingHandoffCard } from './meeting-handoff-card';
 
 const SMOKE_PAYMENT_ID = 'smoke:payment:visual-state';
 const SMOKE_PAYMENT_MESSAGE_ID = 9_900_001;
 const SMOKE_VOICE_MESSAGE_ID = 9_900_002;
+const SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_ID = 9_900_100;
+const SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_COUNT = 30;
 const SMOKE_VOICE_URI = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
 const SMOKE_ORIGINAL_AVATARS = new Map<string, string>();
+const CHAT_READABILITY_SCRIM = 'rgba(11, 8, 17, 0.58)';
 const DEFAULT_CHAT_BUBBLE_VARIANT: ChatBubbleMaterialVariant = (
   process.env.EXPO_PUBLIC_NANA_CHAT_BUBBLE_VARIANT === 'legacy'
     ? 'legacy'
@@ -38,8 +43,10 @@ type NanaSmokeScope = typeof globalThis & {
   __NANA_SMOKE_SET_CUSTOM_AVATAR__?: (enabled: boolean) => void;
   __NANA_SMOKE_SET_BUBBLE_VARIANT__?: (variant: 'a' | 'b') => void;
   __NANA_SMOKE_ADD_VOICE_SAMPLE__?: () => void;
+  __NANA_SMOKE_SCROLL_TO_VOICE_SAMPLE__?: () => boolean;
   __NANA_SMOKE_SEED_LONG_CHAT__?: (count?: number) => void;
   __NANA_SMOKE_SET_LANGUAGE__?: (language: 'en' | 'zh') => void;
+  __NANA_SMOKE_SEED_MEETING_HANDOFF__?: () => void;
 };
 
 const clockMinutes = (value: string) => {
@@ -63,17 +70,20 @@ const shouldShowTimeSeparator = (messages: Message[], index: number) => {
   return elapsed >= 5;
 };
 
-export function ChatView() {
+export function ChatView({ chatId }: { chatId?: string | null } = {}) {
   const { t, renderAvatar } = useApp();
   const scrollRef = useRef<FlashListRef<Message>>(null);
   const initialScrollChatId = useRef<string | null>(null);
   const lastMessageCount = useRef(0);
+  const historyLoadChatId = useRef<string | null>(null);
+  const historyCommitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const kbHeight = useKeyboardHeight();
-  const { width, height } = useWindowDimensions();
-  const compact = width <= 360 || height < 700;
+  const { compact, stableHeight } = useStableViewportMetrics();
   const [bubbleVariant, setBubbleVariant] = useState<ChatBubbleMaterialVariant>(DEFAULT_CHAT_BUBBLE_VARIANT);
+  const [preparedHistoryChatId, setPreparedHistoryChatId] = useState<string | null>(null);
 
-  const activeChatId = useNanaStore(state => state.activeChatId);
+  const storeActiveChatId = useNanaStore(state => state.activeChatId);
+  const activeChatId = chatId === undefined ? storeActiveChatId : chatId;
   const characters = useNanaStore(state => state.characters);
   const chatHistory = useNanaStore(state => state.chatHistory);
   const pendingChatRequests = useNanaStore(state => state.pendingChatRequests);
@@ -81,15 +91,32 @@ export function ChatView() {
   const selectMode = useNanaStore(state => state.selectMode);
   const chatPanel = useNanaStore(state => state.chatPanel);
   const paymentModal = useNanaStore(state => state.paymentModal);
+  const meetingHandoff = useNanaStore(state => activeChatId
+    ? state.conversationContinuityByCharacter[activeChatId]?.meetingHandoff
+    : undefined);
 
   const messages = useMemo(
     () => activeChatId ? chatHistory[activeChatId] || [] : [],
     [activeChatId, chatHistory],
   );
   const messageCount = messages.length;
+  const historyFrameReady = !activeChatId
+    || messageCount === 0
+    || preparedHistoryChatId === activeChatId;
   const isGenerating = activeChatId ? !!pendingChatRequests[activeChatId] : false;
   const paymentModalOpen =
     paymentModal.type === 'transfer' || paymentModal.type === 'redpacket';
+  const visibleMeetingHandoff = meetingHandoff
+    && meetingHandoff.expiresAt > Date.now()
+    && meetingHandoff.state !== 'dismissed'
+    ? meetingHandoff
+    : undefined;
+
+  useEffect(() => {
+    if (!visibleMeetingHandoff) return undefined;
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 60);
+    return () => clearTimeout(timer);
+  }, [visibleMeetingHandoff]);
 
   useEffect(() => {
     if (process.env.EXPO_PUBLIC_NANA_SMOKE !== '1' || process.env.EXPO_OS !== 'web' || !activeChatId) return undefined;
@@ -161,26 +188,89 @@ export function ChatView() {
         themeConfig: { ...current.themeConfig, language },
       }));
     };
-    scope.__NANA_SMOKE_ADD_VOICE_SAMPLE__ = () => {
+    scope.__NANA_SMOKE_SEED_MEETING_HANDOFF__ = () => {
+      const now = Date.now();
       useNanaStore.setState(current => {
-        const character = current.characters.find(item => item.id === activeChatId);
-        const currentMessages = (current.chatHistory[activeChatId] || []).filter(message => message.id !== SMOKE_VOICE_MESSAGE_ID);
+        const existing = current.conversationContinuityByCharacter[activeChatId];
         return {
-          chatHistory: {
-            ...current.chatHistory,
-            [activeChatId]: [...currentMessages, {
-              id: SMOKE_VOICE_MESSAGE_ID,
-              sender: 'char',
-              text: '',
-              time: '09:32 AM',
-              avatar: character?.avatar || '',
-              type: 'voice',
-              audioUri: SMOKE_VOICE_URI,
-              audioDurationSec: 15,
-            }],
+          conversationContinuityByCharacter: {
+            ...current.conversationContinuityByCharacter,
+            [activeChatId]: {
+              schemaVersion: 1,
+              characterId: activeChatId,
+              emotion: existing?.emotion || 'warm',
+              emotionReason: existing?.emotionReason,
+              emotionUpdatedAt: existing?.emotionUpdatedAt || now,
+              emotionExpiresAt: Math.max(existing?.emotionExpiresAt || 0, now + 36 * 60 * 60 * 1_000),
+              topics: existing?.topics || [],
+              openLoops: existing?.openLoops || [],
+              meetingHandoff: {
+                id: `smoke-handoff:${activeChatId}`,
+                state: 'available',
+                title: '雨停后的咖啡馆',
+                premise: '你和 Luna 已在线上约好，雨停后在街角咖啡馆见面，继续刚才没说完的话。',
+                sourceTurnId: 'smoke-chat-turn',
+                sourceMessageIds: [9_901_001, 9_901_002],
+                createdAt: now,
+                updatedAt: now,
+                expiresAt: now + 14 * 24 * 60 * 60 * 1_000,
+              },
+              lastTurnId: existing?.lastTurnId,
+              updatedAt: now,
+              expiresAt: now + 14 * 24 * 60 * 60 * 1_000,
+            },
           },
         };
       });
+    };
+    scope.__NANA_SMOKE_ADD_VOICE_SAMPLE__ = () => {
+      useNanaStore.setState(current => {
+        const character = current.characters.find(item => item.id === activeChatId);
+        const currentMessages = (current.chatHistory[activeChatId] || []).filter(message => (
+          message.id !== SMOKE_VOICE_MESSAGE_ID
+          && (
+            message.id < SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_ID
+            || message.id >= SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_ID + SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_COUNT
+          )
+        ));
+        const transcriptAnchorMessages: Message[] = Array.from(
+          { length: SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_COUNT },
+          (_, index) => ({
+            id: SMOKE_TRANSCRIPT_ANCHOR_MESSAGE_ID + index,
+            sender: index % 2 === 0 ? 'user' : 'char',
+            text: `Transcript anchor message ${index + 1}`,
+            time: '09:33 AM',
+            type: 'text',
+          }),
+        );
+        return {
+          chatHistory: {
+            ...current.chatHistory,
+            [activeChatId]: [
+              ...currentMessages,
+              {
+                id: SMOKE_VOICE_MESSAGE_ID,
+                sender: 'char',
+                text: '',
+                time: '09:32 AM',
+                avatar: character?.avatar || '',
+                type: 'voice',
+                audioUri: SMOKE_VOICE_URI,
+                audioDurationSec: 15,
+                transcript: 'I saved this little voice note for you. The library is quiet today, so I can hear the rain against every window. Tell me when you are free.',
+              },
+              ...transcriptAnchorMessages,
+            ],
+          },
+        };
+      });
+    };
+    scope.__NANA_SMOKE_SCROLL_TO_VOICE_SAMPLE__ = () => {
+      const index = (useNanaStore.getState().chatHistory[activeChatId] || [])
+        .findIndex(message => message.id === SMOKE_VOICE_MESSAGE_ID);
+      if (index < 0) return false;
+      scrollRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0.35 });
+      return true;
     };
     scope.__NANA_SMOKE_SEED_LONG_CHAT__ = (requestedCount = 2_000) => {
       const count = Math.max(1, Math.min(5_000, Math.floor(requestedCount)));
@@ -203,16 +293,35 @@ export function ChatView() {
       delete scope.__NANA_SMOKE_SET_CUSTOM_AVATAR__;
       delete scope.__NANA_SMOKE_SET_BUBBLE_VARIANT__;
       delete scope.__NANA_SMOKE_ADD_VOICE_SAMPLE__;
+      delete scope.__NANA_SMOKE_SCROLL_TO_VOICE_SAMPLE__;
       delete scope.__NANA_SMOKE_SEED_LONG_CHAT__;
       delete scope.__NANA_SMOKE_SET_LANGUAGE__;
+      delete scope.__NANA_SMOKE_SEED_MEETING_HANDOFF__;
     };
   }, [activeChatId]);
 
   useEffect(() => {
+    if (historyCommitTimer.current) {
+      clearTimeout(historyCommitTimer.current);
+      historyCommitTimer.current = null;
+    }
+    historyLoadChatId.current = null;
     initialScrollChatId.current = null;
     const state = useNanaStore.getState();
     lastMessageCount.current = activeChatId ? (state.chatHistory[activeChatId] || []).length : 0;
+    return () => {
+      if (historyCommitTimer.current) {
+        clearTimeout(historyCommitTimer.current);
+        historyCommitTimer.current = null;
+      }
+    };
   }, [activeChatId]);
+
+  useEffect(() => {
+    if (activeChatId && messageCount === 0) {
+      setPreparedHistoryChatId(activeChatId);
+    }
+  }, [activeChatId, messageCount]);
 
   useEffect(() => {
     if (!activeChatId || initialScrollChatId.current !== activeChatId) return;
@@ -227,6 +336,29 @@ export function ChatView() {
     lastMessageCount.current = messageCount;
     return undefined;
   }, [activeChatId, kbHeight, messageCount]);
+
+  const commitStableHistoryFrame = useCallback(() => {
+    if (
+      !activeChatId
+      || historyLoadChatId.current !== activeChatId
+      || initialScrollChatId.current === activeChatId
+    ) return;
+    if (historyCommitTimer.current) clearTimeout(historyCommitTimer.current);
+    const chatIdAtSchedule = activeChatId;
+    historyCommitTimer.current = setTimeout(() => {
+      historyCommitTimer.current = null;
+      if (historyLoadChatId.current !== chatIdAtSchedule) return;
+      scrollRef.current?.scrollToEnd({ animated: false });
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (historyLoadChatId.current !== chatIdAtSchedule) return;
+          initialScrollChatId.current = chatIdAtSchedule;
+          lastMessageCount.current = messageCount;
+          setPreparedHistoryChatId(chatIdAtSchedule);
+        });
+      });
+    }, 72);
+  }, [activeChatId, messageCount]);
 
   const handleAvatarClick = useCallback(() => {
     useNanaStore.setState({ activeProfileId: activeChatId, weChatPage: 'profile' });
@@ -309,54 +441,105 @@ export function ChatView() {
       style={{
         flex: 1,
         minHeight: 0,
+        position: 'relative',
         // useKeyboardHeight returns only the IME portion not already handled by
         // Android adjustResize, so this works for edge-to-edge and resized apps.
         paddingBottom: chatPanel === 'none' ? kbHeight : 0,
       }}
     >
+      <View
+        testID="chat-readability-scrim"
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFillObject,
+          { backgroundColor: CHAT_READABILITY_SCRIM },
+        ]}
+      />
+
       {selectMode ? <SelectModeBar onForward={rememberSelectedMessages} /> : null}
 
       <View style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <FlashList
-          key={activeChatId}
-          ref={scrollRef}
-          data={messages}
-          keyExtractor={message => String(message.id)}
-          renderItem={renderMessage}
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          keyboardShouldPersistTaps="handled"
-          onTouchStart={() => {
-            if (kbHeight > 0) Keyboard.dismiss();
+        <View
+          testID={historyFrameReady ? 'chat-history-frame-ready' : 'chat-history-frame-preparing'}
+          pointerEvents={historyFrameReady ? 'auto' : 'none'}
+          accessibilityElementsHidden={!historyFrameReady}
+          importantForAccessibility={historyFrameReady ? 'auto' : 'no-hide-descendants'}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            opacity: historyFrameReady ? 1 : 0,
           }}
-          showsVerticalScrollIndicator={false}
-          style={{ flex: 1, flexShrink: 1, minHeight: 0 }}
-          contentContainerStyle={{
-            paddingHorizontal: compact ? 4 : 9,
-            paddingTop: compact ? 3 : 7,
-            paddingBottom: 12,
-          }}
-          maintainVisibleContentPosition={{
-            startRenderingFromBottom: true,
-            autoscrollToBottomThreshold: 0.2,
-            // The first frame should already be the newest message. Animating
-            // FlashList's initial correction makes long chats visibly sweep
-            // down from older messages on Android.
-            animateAutoScrollToBottom: false,
-          }}
-          onLoad={() => {
-            if (!activeChatId) return;
-            initialScrollChatId.current = activeChatId;
-            lastMessageCount.current = messageCount;
-          }}
-          ListFooterComponent={isGenerating ? (
-            <TypingIndicator
-              activeChatId={activeChatId}
-              characters={characters}
-              renderAvatar={renderAvatar}
-              bubbleVariant={bubbleVariant}
-            />
-          ) : null}
-        />
+        >
+          <FlashList
+            key={activeChatId}
+            ref={scrollRef}
+            data={messages}
+            keyExtractor={message => String(message.id)}
+            renderItem={renderMessage}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardShouldPersistTaps="handled"
+            onTouchStart={() => {
+              if (kbHeight > 0) Keyboard.dismiss();
+            }}
+            showsVerticalScrollIndicator={false}
+            drawDistance={Math.max(stableHeight, 900)}
+            style={{ flex: 1, flexShrink: 1, minHeight: 0 }}
+            contentContainerStyle={{
+              paddingHorizontal: compact ? 4 : 9,
+              paddingTop: compact ? 3 : 7,
+              paddingBottom: 12,
+            }}
+            maintainVisibleContentPosition={{
+              // FlashList only needs its anchor while preparing the initial
+              // bottom-aligned frame. Afterwards, transcript layout changes
+              // should be handled once by Yoga/Reanimated without scroll-anchor
+              // bookkeeping on every frame.
+              disabled: historyFrameReady,
+              startRenderingFromBottom: true,
+              // The first frame should already be the newest message. Animating
+              // FlashList's initial correction makes long chats visibly sweep
+              // down from older messages on Android.
+              animateAutoScrollToBottom: false,
+            }}
+            onLoad={() => {
+              if (!activeChatId) return;
+              historyLoadChatId.current = activeChatId;
+              // onLoad fires after FlashList's first measured cells, but Android
+              // can still commit more visible rows and correct the bottom offset
+              // immediately afterwards. Debounce those content-size commits,
+              // snap to the end, then expose the fully prepared viewport at once.
+              commitStableHistoryFrame();
+            }}
+            onContentSizeChange={() => {
+              // Transcript expansion and collapse also change the content size.
+              // Only the initial chat entry may correct the list to the bottom;
+              // later row-height changes must preserve the reader's position.
+              if (initialScrollChatId.current !== activeChatId) {
+                commitStableHistoryFrame();
+              }
+            }}
+            ListFooterComponent={(visibleMeetingHandoff || isGenerating) ? (
+              <View>
+                {visibleMeetingHandoff && activeChatId ? (
+                  <MeetingHandoffCard
+                    handoff={visibleMeetingHandoff}
+                    characterName={characters.find(character => character.id === activeChatId)?.name || '对方'}
+                    onOpen={() => void useNanaStore.getState().openMeetingHandoff(activeChatId, 'automatic')}
+                    onDismiss={() => useNanaStore.getState().dismissMeetingHandoff(activeChatId)}
+                  />
+                ) : null}
+                {isGenerating ? (
+                  <TypingIndicator
+                    activeChatId={activeChatId}
+                    characters={characters}
+                    renderAvatar={renderAvatar}
+                    bubbleVariant={bubbleVariant}
+                  />
+                ) : null}
+              </View>
+            ) : null}
+          />
+        </View>
 
         {compact ? (
           <View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, left: 0, height: 12 }}>

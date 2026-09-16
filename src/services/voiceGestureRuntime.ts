@@ -1,8 +1,9 @@
 export const MIN_VOICE_GESTURE_DURATION_MS = 1_000;
 export const MAX_VOICE_GESTURE_DURATION_MS = 60_000;
-export const CANCEL_VOICE_GESTURE_TRANSLATION_Y = -64;
-export const RECOVER_VOICE_GESTURE_TRANSLATION_Y = -40;
-export const TRANSCRIBE_VOICE_GESTURE_X_RATIO = 0.62;
+export const VOICE_GESTURE_TRACK_MAX_WIDTH = 402;
+export const VOICE_GESTURE_TRACK_OUTER_GUTTER = 14;
+export const VOICE_GESTURE_TRACK_INSET = 8;
+export const VOICE_GESTURE_SEGMENT_HYSTERESIS = 10;
 
 export type VoiceGesturePhase =
   | 'idle'
@@ -35,7 +36,7 @@ export interface VoiceGestureState {
   phase: VoiceGesturePhase;
   startedAt: number | null;
   elapsedMs: number;
-  translationY: number;
+  trackPosition: number;
   cancelArmed: boolean;
   transcribeArmed: boolean;
   captureStarted: boolean;
@@ -48,7 +49,7 @@ export type VoiceGestureEvent =
   | { type: 'CAPTURE_STARTED'; now: number }
   | { type: 'CAPTURE_PERMISSION_BLOCKED' }
   | { type: 'CAPTURE_FAILED' }
-  | { type: 'MOVE'; translationY: number; now: number; pageX?: number; viewportWidth?: number }
+  | { type: 'MOVE'; pageX: number; viewportWidth: number; now: number }
   | { type: 'PRESS_OUT'; now: number }
   | { type: 'TICK'; now: number }
   | { type: 'CAPTURE_FINISHED' }
@@ -72,7 +73,7 @@ export const createVoiceGestureState = (): VoiceGestureState => ({
   phase: 'idle',
   startedAt: null,
   elapsedMs: 0,
-  translationY: 0,
+  trackPosition: 1,
   cancelArmed: false,
   transcribeArmed: false,
   captureStarted: false,
@@ -94,51 +95,73 @@ const isActive = (phase: VoiceGesturePhase) => (
 
 export type VoiceGestureTarget = 'send' | 'cancel' | 'transcribe';
 
+export const getVoiceGestureTrackMetrics = (viewportWidth: number) => {
+  const safeViewportWidth = Math.max(1, viewportWidth);
+  const controlWidth = Math.min(
+    Math.max(1, safeViewportWidth - VOICE_GESTURE_TRACK_OUTER_GUTTER * 2),
+    VOICE_GESTURE_TRACK_MAX_WIDTH,
+  );
+  const trackWidth = Math.max(1, controlWidth - VOICE_GESTURE_TRACK_INSET * 2);
+  const trackLeft = (safeViewportWidth - controlWidth) / 2 + VOICE_GESTURE_TRACK_INSET;
+  const segmentWidth = trackWidth / 3;
+  return {
+    trackLeft,
+    trackWidth,
+    segmentWidth,
+    cancelBoundary: trackLeft + segmentWidth,
+    transcribeBoundary: trackLeft + segmentWidth * 2,
+  };
+};
+
+export const projectVoiceGesturePageX = ({
+  startPageX,
+  currentPageX,
+  viewportWidth,
+}: {
+  startPageX: number;
+  currentPageX: number;
+  viewportWidth: number;
+}) => viewportWidth / 2 + (currentPageX - startPageX);
+
+export const resolveVoiceGestureTrackPosition = (pageX: number, viewportWidth: number) => {
+  const { trackLeft, segmentWidth } = getVoiceGestureTrackMetrics(viewportWidth);
+  const firstCenter = trackLeft + segmentWidth / 2;
+  return Math.max(0, Math.min(2, (pageX - firstCenter) / segmentWidth));
+};
+
 export const resolveVoiceGestureTarget = ({
   currentTarget,
-  translationY,
   pageX,
   viewportWidth,
 }: {
   currentTarget: VoiceGestureTarget;
-  translationY: number;
-  pageX?: number;
-  viewportWidth?: number;
+  pageX: number;
+  viewportWidth: number;
 }): VoiceGestureTarget => {
-  if (currentTarget !== 'send' && translationY >= RECOVER_VOICE_GESTURE_TRANSLATION_Y) return 'send';
-  if (translationY > CANCEL_VOICE_GESTURE_TRANSLATION_Y) return currentTarget;
-  if (
-    typeof pageX === 'number'
-    && typeof viewportWidth === 'number'
-    && viewportWidth > 0
-    && pageX >= viewportWidth * TRANSCRIBE_VOICE_GESTURE_X_RATIO
-  ) {
+  const { cancelBoundary, transcribeBoundary } = getVoiceGestureTrackMetrics(viewportWidth);
+
+  if (currentTarget === 'cancel') {
+    if (pageX >= transcribeBoundary) return 'transcribe';
+    if (pageX >= cancelBoundary + VOICE_GESTURE_SEGMENT_HYSTERESIS) return 'send';
+    return 'cancel';
+  }
+
+  if (currentTarget === 'transcribe') {
+    if (pageX <= cancelBoundary) return 'cancel';
+    if (pageX <= transcribeBoundary - VOICE_GESTURE_SEGMENT_HYSTERESIS) return 'send';
     return 'transcribe';
   }
-  return 'cancel';
-};
 
-export const resolveVoiceGestureCancelArmed = (
-  cancelArmed: boolean,
-  translationY: number,
-) => cancelArmed
-  ? translationY < RECOVER_VOICE_GESTURE_TRANSLATION_Y
-  : translationY <= CANCEL_VOICE_GESTURE_TRANSLATION_Y;
+  if (pageX <= cancelBoundary) return 'cancel';
+  if (pageX >= transcribeBoundary) return 'transcribe';
+  return 'send';
+};
 
 export const resolveVoiceGestureRelease = (
   startedAt: number,
   releasedAt: number,
-  translationY: number,
 ): VoiceReleaseResolution => {
   const elapsedMs = Math.max(0, releasedAt - startedAt);
-  if (translationY <= CANCEL_VOICE_GESTURE_TRANSLATION_Y) {
-    return {
-      shouldSend: false,
-      shouldDiscard: true,
-      elapsedMs,
-      outcome: 'drag-cancel',
-    };
-  }
   if (elapsedMs < MIN_VOICE_GESTURE_DURATION_MS) {
     return {
       shouldSend: false,
@@ -170,7 +193,7 @@ export function reduceVoiceGesture(
         phase: 'starting',
         startedAt: event.now,
         elapsedMs: 0,
-        translationY: 0,
+        trackPosition: 1,
         cancelArmed: false,
         transcribeArmed: false,
         captureStarted: false,
@@ -216,7 +239,6 @@ export function reduceVoiceGesture(
         : 'send';
     const target = resolveVoiceGestureTarget({
       currentTarget,
-      translationY: event.translationY,
       pageX: event.pageX,
       viewportWidth: event.viewportWidth,
     });
@@ -230,7 +252,7 @@ export function reduceVoiceGesture(
           ? 'transcribeArmed'
           : (state.captureStarted ? 'recording' : 'starting'),
       elapsedMs: Math.min(elapsedSince(state, event.now), MAX_VOICE_GESTURE_DURATION_MS),
-      translationY: event.translationY,
+      trackPosition: resolveVoiceGestureTrackPosition(event.pageX, event.viewportWidth),
       cancelArmed,
       transcribeArmed,
     });
@@ -259,7 +281,7 @@ export function reduceVoiceGesture(
           elapsedMs: elapsedSince(state, event.now),
           outcome: 'drag-cancel' as const,
         }
-      : resolveVoiceGestureRelease(state.startedAt, event.now, state.translationY);
+      : resolveVoiceGestureRelease(state.startedAt, event.now);
     if (resolution.shouldDiscard) {
       return {
         state: {

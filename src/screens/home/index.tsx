@@ -1,14 +1,13 @@
-import { Alert, AppState, BackHandler, Keyboard, Platform, Pressable, StyleSheet, View, Text, ScrollView, useWindowDimensions, type AppStateStatus } from 'react-native';
+import { Alert, AppState, BackHandler, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View, Text, ScrollView, type AppStateStatus } from 'react-native';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { MotiView } from 'moti';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BookOpen,
   Brain,
   Ban,
   ChevronLeft,
-  Image,
   MessageCircleMore,
+  MapPinned,
   MoonStar,
   MoreHorizontal,
   Music,
@@ -35,24 +34,27 @@ import { ThemeView } from '../../components/ThemeView';
 import { UserView } from '../../components/UserView';
 import { PresetsView } from '../../components/PresetsView';
 import { WorldBookView } from '../../components/WorldBookView';
+import { MeetingAppContainer } from '../../features/meeting/meeting-app-container';
 import { wechatTheme } from '../../components/wechatTheme';
 import { PromptModal } from '../../components/PromptModal';
 import { AppGridIcon } from '../../components/system/AppGridIcon';
 import { BottomDock } from '../../components/system/BottomDock';
-import {
-  useDynamicIslandExpanded,
-  useReduceMotionEnabled,
-} from '../../components/system/DynamicIsland';
 import { HomeWeatherWidget } from '../../components/system/HomeWeatherWidget';
 import { SkyScene } from '../../components/system/SkyScene';
+import {
+  getPhoneShellBottomPadding,
+  getPhoneShellTopPadding,
+} from '../../components/system/phone-shell-layout';
 import {
   ThickGlassBackdropProvider,
   ThickGlassBackdropTarget,
 } from '../../components/thick-glass-surface';
 import { palette } from '../../constants/design';
+import { useStableViewportMetrics } from '../../hooks/useStableViewportMetrics';
 
 const APPS = [
   { labelKey: 'wechat', icon: <MessageCircleMore size={22} color="#4B9A82" strokeWidth={2.2} />, colors: ['#FFFFFF', '#D9F0F0'] as [string, string], app: 'wechat', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/wechat.png') },
+  { labelKey: 'meeting', icon: <Users size={21} color="#6F568B" strokeWidth={2.1} />, colors: ['#FFFFFF', '#E5D9F7'] as [string, string], app: 'meeting', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/meeting-v2.png') },
   { labelKey: 'worldBook', icon: <BookOpen size={21} color="#557FA9" strokeWidth={2.1} />, colors: ['#FFFFFF', '#D9EEFF'] as [string, string], app: 'worldbook', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/worldbook.png') },
   { labelKey: 'presets', icon: <SlidersHorizontal size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: 'presets', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/presets.png') },
   { labelKey: 'settings', icon: <Settings size={22} color="#65738F" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EEF5FB'] as [string, string], app: 'settings', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/settings.png') },
@@ -60,7 +62,6 @@ const APPS = [
   { labelKey: 'user', icon: <UserRoundPen size={21} color="#B36A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F6DDE7'] as [string, string], app: 'user', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/user.png') },
   { labelKey: 'theme', icon: <Palette size={21} color="#6674B0" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: 'theme', assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/theme.png') },
   { labelKey: 'sounds', icon: <Music size={21} color="#9A3B6E" strokeWidth={2.1} />, colors: ['#FFFFFF', '#EBE3FF'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/sounds.png') },
-  { labelKey: 'photos', icon: <Image size={21} color="#C06A91" strokeWidth={2.1} />, colors: ['#FFFFFF', '#F4C8D7'] as [string, string], app: null, assetPreview: require('../../../assets/generated/nana-neumorphic-icons-v1/photos.png') },
 ];
 
 const DesktopRuntimeActivityContext = createContext(true);
@@ -78,6 +79,7 @@ function useAppStateActive() {
 
 function AppContent({ activeApp }: { activeApp: string | null }) {
   if (activeApp === 'wechat') return <WeChatRootView />;
+  if (activeApp === 'meeting') return <MeetingAppContainer />;
   if (activeApp === 'characters') return <CharacterView />;
   if (activeApp === 'settings') return <SettingsView />;
   if (activeApp === 'worldbook') return <WorldBookView />;
@@ -194,6 +196,7 @@ function AppOverlay() {
   const { t } = useApp();
   const storeActiveApp = useNanaStore(s => s.activeApp);
   const [renderedApp, setRenderedApp] = useState(storeActiveApp);
+  const [wechatMounted, setWechatMounted] = useState(storeActiveApp === 'wechat');
   const callOverlay = useNanaStore(s => s.callOverlay);
   const chromeStyle = useNanaStore(s => s.themeConfig.chromeStyle);
   const weChatPage = useNanaStore(s => s.weChatPage);
@@ -210,19 +213,12 @@ function AppOverlay() {
   const editingCharId = useNanaStore(s => s.editingCharId);
   const set = useNanaStore.setState;
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const compactHeight = height < 700;
+  const { width, compactHeight } = useStableViewportMetrics();
   const compactWidth = width <= 340;
-  const islandExpanded = useDynamicIslandExpanded();
-  const reduceMotionEnabled = useReduceMotionEnabled();
   const [chatHeaderMenu, setChatHeaderMenu] = useState<ChatHeaderMenu>('none');
   const activeApp = storeActiveApp ?? renderedApp;
-  const appLayerUnmountGrace = {
-    // Keep the just-closed tree alive briefly so a rapid reopen can reuse it,
-    // but hide it immediately instead of fading the old page over the desktop.
-    duration: reduceMotionEnabled ? 100 : 220,
-  };
   const isCallActive = activeApp === 'wechat' && callOverlay.show;
+  const isMeeting = activeApp === 'meeting';
   const shellInk = wechatTheme.ink;
   const shellMuted = wechatTheme.inkMuted;
   const dismissChatKeyboard = () => {
@@ -248,29 +244,22 @@ function AppOverlay() {
   const worldBookCharName = worldBookCharId ? characters.find(c => c.id === worldBookCharId)?.name : '';
   const isWeChatChat = activeApp === 'wechat' && weChatPage === 'chat' && !!activeChatId;
   const isWeChatRoot = activeApp === 'wechat' && weChatPage === 'root';
-  const islandTopOffset = chromeStyle === 'neumorphic-v1' ? 5 : compactHeight ? 4 : 10;
-  const islandSafeHeight = islandExpanded ? (compactHeight ? 60 : 66) : 44;
-  const shellTopPadding = Math.max(
-    insets.top + islandTopOffset + islandSafeHeight + 8,
-    compactHeight ? 64 : 70,
-  );
+  const shellTopPadding = getPhoneShellTopPadding({
+    safeTop: insets.top,
+    compact: compactHeight,
+    chromeStyle,
+    dynamicIslandVisible: !isMeeting,
+  });
 
   useEffect(() => {
     setChatHeaderMenu('none');
   }, [activeChatId, weChatPage]);
 
   useEffect(() => {
-    if (storeActiveApp) {
-      setRenderedApp(storeActiveApp);
-      return undefined;
-    }
-    if (!renderedApp) return undefined;
-    const timer = setTimeout(
-      () => setRenderedApp(null),
-      appLayerUnmountGrace.duration,
-    );
-    return () => clearTimeout(timer);
-  }, [appLayerUnmountGrace.duration, renderedApp, storeActiveApp]);
+    if (!storeActiveApp) return;
+    setRenderedApp(storeActiveApp);
+    if (storeActiveApp === 'wechat') setWechatMounted(true);
+  }, [storeActiveApp]);
 
   useEffect(() => {
     if (chatHeaderMenu === 'none' || Platform.OS !== 'android') return undefined;
@@ -306,6 +295,12 @@ function AppOverlay() {
   const openCharacterProfile = () => {
     setChatHeaderMenu('none');
     set({ activeProfileId: activeChatId, weChatPage: 'profile' });
+  };
+
+  const openMeetingFromChat = () => {
+    if (!activeChatId) return;
+    setChatHeaderMenu('none');
+    void useNanaStore.getState().openMeetingHandoff(activeChatId, 'manual');
   };
 
   const toggleBlocked = () => {
@@ -447,6 +442,12 @@ function AppOverlay() {
             onPress: openCharacterProfile,
           },
           {
+            label: '去见面',
+            testID: 'header-go-to-meeting-button',
+            icon: <MapPinned size={19} color={wechatTheme.peach} strokeWidth={1.7} />,
+            onPress: openMeetingFromChat,
+          },
+          {
             label: t.manageChat,
             testID: 'header-manage-chat-button',
             icon: <Settings size={19} color={wechatTheme.inkMuted} strokeWidth={1.7} />,
@@ -478,19 +479,15 @@ function AppOverlay() {
         : [];
 
   const content = (
-    <MotiView
-      from={{ paddingTop: isCallActive ? 0 : shellTopPadding }}
-      animate={{ paddingTop: isCallActive ? 0 : shellTopPadding }}
-      transition={reduceMotionEnabled
-        ? { type: 'timing', duration: 100 }
-        : { type: 'spring', damping: 24, stiffness: 245, mass: 0.8 }}
+    <View
       style={{
         flex: 1,
-        paddingHorizontal: isCallActive ? 0 : (isWeChatChat ? 0 : (activeApp === 'wechat' ? (compactHeight ? 12 : 16) : 20)),
-        paddingBottom: isCallActive ? 0 : 8,
+        paddingTop: isCallActive ? 0 : shellTopPadding,
+        paddingHorizontal: isCallActive || isMeeting ? 0 : (isWeChatChat ? 0 : (activeApp === 'wechat' ? (compactHeight ? 12 : 16) : 20)),
+        paddingBottom: isCallActive ? 0 : getPhoneShellBottomPadding(insets.bottom),
       }}
     >
-      {!isCallActive && <View style={{ marginBottom: compactHeight ? 8 : 14, paddingHorizontal: isWeChatChat ? (compactHeight ? 12 : 16) : 0 }}>
+      {!isCallActive && !isMeeting && <View style={{ marginBottom: compactHeight ? 8 : 14, paddingHorizontal: isWeChatChat ? (compactHeight ? 12 : 16) : 0 }}>
         {isWeChatChat ? (
           <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: compactHeight ? 8 : 10 }}>
             <ShellGlassButton label={t.chats} onPress={() => { dismissChatKeyboard(); useNanaStore.getState().goBack(); }}>
@@ -570,7 +567,30 @@ function AppOverlay() {
       </View>}
 
       <View style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <AppContent activeApp={activeApp} />
+        {wechatMounted ? (
+          <View
+            pointerEvents={activeApp === 'wechat' ? 'auto' : 'none'}
+            accessibilityElementsHidden={activeApp !== 'wechat'}
+            importantForAccessibility={activeApp === 'wechat' ? 'auto' : 'no-hide-descendants'}
+            style={[
+              StyleSheet.absoluteFillObject,
+              { opacity: activeApp === 'wechat' ? 1 : 0 },
+            ]}
+          >
+            <WeChatRootView />
+          </View>
+        ) : null}
+        {activeApp !== 'wechat' ? (
+          activeApp === 'meeting' ? <AppContent activeApp={activeApp} /> : (
+            <KeyboardAvoidingView
+              testID="app-keyboard-avoiding-content"
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={{ flex: 1, minHeight: 0 }}
+            >
+              <AppContent activeApp={activeApp} />
+            </KeyboardAvoidingView>
+          )
+        ) : null}
         <PromptModal />
       </View>
 
@@ -583,7 +603,7 @@ function AppOverlay() {
           onDismiss={() => setChatHeaderMenu('none')}
         />
       ) : null}
-    </MotiView>
+    </View>
   );
 
   if (!activeApp) return null;
@@ -632,17 +652,17 @@ export default function HomeScreen() {
   const chromeStyle = useNanaStore(s => s.themeConfig.chromeStyle);
   const set = useNanaStore.setState;
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const compactHeight = height < 700;
+  const { width, compactHeight } = useStableViewportMetrics();
   const compactGrid = compactHeight || width <= 360;
   const contentWidth = Math.min(width - (compactGrid ? 22 : 36), 390);
-  const islandExpanded = useDynamicIslandExpanded();
-  const reduceMotionEnabled = useReduceMotionEnabled();
   const appStateActive = useAppStateActive();
   const desktopRuntimeActive = appStateActive && !activeApp;
-  const islandTopOffset = chromeStyle === 'neumorphic-v1' ? 5 : compactHeight ? 4 : 10;
-  const islandSafeHeight = islandExpanded ? (compactHeight ? 60 : 66) : 44;
-  const homeTopPadding = insets.top + islandTopOffset + islandSafeHeight + 8;
+  const homeTopPadding = getPhoneShellTopPadding({
+    safeTop: insets.top,
+    compact: compactHeight,
+    chromeStyle,
+    dynamicIslandVisible: true,
+  });
 
   return (
     <DesktopRuntimeActivityContext.Provider value={desktopRuntimeActive}>
@@ -660,13 +680,7 @@ export default function HomeScreen() {
           importantForAccessibility={activeApp ? 'no-hide-descendants' : 'auto'}
           style={{ flex: 1, display: activeApp ? 'none' : 'flex' }}
         >
-          <MotiView
-            animate={{ paddingTop: homeTopPadding }}
-            transition={reduceMotionEnabled
-              ? { type: 'timing', duration: 100 }
-              : { type: 'timing', duration: 180 }}
-            style={{ flex: 1, alignItems: 'center', paddingBottom: insets.bottom + 12 }}
-          >
+          <View style={{ flex: 1, alignItems: 'center', paddingTop: homeTopPadding, paddingBottom: insets.bottom + 12 }}>
             <ScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ width: contentWidth, flexGrow: 1, paddingBottom: compactHeight ? 6 : 18 }}
@@ -723,7 +737,7 @@ export default function HomeScreen() {
             <View style={{ width: Math.min(contentWidth, 316), marginBottom: 2 }}>
               <BottomDock compact={compactHeight} />
             </View>
-          </MotiView>
+          </View>
         </View>
 
           <AppOverlay />

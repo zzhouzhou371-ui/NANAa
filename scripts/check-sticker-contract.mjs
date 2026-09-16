@@ -150,6 +150,10 @@ expect(panelSource.includes('onSelect(sticker)'), 'chat sticker panel must expos
 expect(managerSource.includes("['global', copy.global]"), 'manager must expose a global pack tab');
 expect(managerSource.includes("['relationship', copy.relationship]"), 'manager must expose relationship pack tabs');
 expect(
+  managerSource.includes('__NANA_SMOKE_OPEN_STICKER_EDITOR__'),
+  'sticker editor must have a deterministic smoke path that verifies the native modal sheet is visible',
+);
+expect(
   managerSource.includes('onRequestAdd(activeScope, addCharacterId)'),
   'manager must delegate album import through a capability callback without leaking an owner into global scope',
 );
@@ -174,6 +178,15 @@ expect(
 );
 expect(editorSource.includes('tags: parsedTags(tagText)'), 'editor must save semantic tags');
 expect(editorSource.includes('onRequestReplace'), 'editor must delegate media replacement through a callback');
+expect(
+  editorSource.includes('testID="sticker-editor-sheet"')
+    && editorSource.includes('height: editorSheetHeight'),
+  'sticker editor sheet must have a deterministic responsive height inside the transparent modal',
+);
+expect(
+  editorSource.includes('animationType="none"'),
+  'sticker editor modal must not hide its content behind a fade transition',
+);
 const layoutSource = readFileSync(resolve(root, 'src/app/_layout.tsx'), 'utf8');
 expect(layoutSource.includes("intent.kind === 'sticker-import'"), 'startup recovery must route pending sticker imports back to the manager');
 expect(layoutSource.includes('createStickerAssetsFromPickerResult'), 'startup recovery must commit promoted sticker assets through the existing store action');

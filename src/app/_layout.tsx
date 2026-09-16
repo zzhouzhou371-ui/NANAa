@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack } from 'expo-router';
 import { ActivityIndicator, AppState, View, BackHandler, LogBox, Platform, Pressable, Text } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { AppContext } from '../context/AppContext';
 import { i18n } from '../i18n';
@@ -26,16 +26,20 @@ import {
 } from '../services/nativeImagePickerRuntime';
 import { pruneUnreferencedAvatarFiles } from '../services/localMediaRepository';
 import {
+  flushDurableChatHistory,
   hydrateDurableChatHistory,
   startDurableChatHistoryPersistence,
 } from '../services/chatHistoryPersistence';
+import { initializeMeetingRepository } from '../repositories/meetingRepository';
 import {
   configureProactiveNotificationRuntime,
+  consumeLastRemoteProactiveNotification,
   consumeLastProactiveNotificationResponse,
-  dismissPresentedProactiveNotifications,
+  observeRemoteProactiveNotifications,
   observeProactiveNotificationResponses,
   queueProactiveSystemNotificationSync,
 } from '../services/proactiveNotificationRuntime';
+import type { RemoteProactiveEnvelope } from '../services/remoteProactiveRuntime';
 import '../global.css';
 
 if (Platform.OS === 'web') {
@@ -76,6 +80,7 @@ export default function RootLayout() {
       );
       useNanaStore.setState({ chatHistory: durableChatHistory });
       startDurableChatHistoryPersistence();
+      await initializeMeetingRepository();
       useNanaStore.setState({
         apiKey: secret.apiKey,
         tempApiKey: secret.apiKey,
@@ -285,12 +290,23 @@ export default function RootLayout() {
       if (storageReady && previousState !== 'active' && nextState === 'active') {
         useNanaStore.getState().reconcileChatDeliveryStates();
         void useNanaStore.getState().reconcilePayments();
-        void useNanaStore.getState().runProactiveChatHeartbeat()
-          .finally(() => dismissPresentedProactiveNotifications());
+        void useNanaStore.getState().runProactiveChatHeartbeat();
         void useNanaStore.getState().runProactiveMomentsHeartbeat();
       }
     });
     return () => subscription.remove();
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    const commitRemoteMessage = async (envelope: RemoteProactiveEnvelope) => {
+      const result = useNanaStore.getState().receiveRemoteProactiveMessage(envelope);
+      if (result === 'committed') await flushDurableChatHistory();
+    };
+    void consumeLastRemoteProactiveNotification(commitRemoteMessage).catch(error => {
+      console.warn('Could not consume the last remote relationship message.', error);
+    });
+    return observeRemoteProactiveNotifications(commitRemoteMessage);
   }, [storageReady]);
 
   useEffect(() => {
@@ -327,7 +343,6 @@ export default function RootLayout() {
     void configureProactiveNotificationRuntime()
       .then(() => {
         syncNotifications();
-        return dismissPresentedProactiveNotifications();
       })
       .catch(error => {
         console.warn('Could not configure relationship notifications.', error);
@@ -378,7 +393,7 @@ export default function RootLayout() {
 
   if (!storageReady) {
     return (
-      <SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <StatusBar hidden />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, backgroundColor: '#EFECE4' }}>
           {storageError ? (
@@ -406,7 +421,7 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <StatusBar hidden />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <AppContext.Provider value={{ t: t as any, renderAvatar, themeFont, customTextColor }}>

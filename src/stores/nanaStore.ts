@@ -28,6 +28,8 @@ import {
 } from '../services/mediaRuntime';
 import { buildCallConversationChatHistory } from '../services/callConversationRuntime';
 import { speakSpeechSynthesisPlan, stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
+import { toSpeakableText } from '../services/speakableText';
+import { VOICE_CALL_TRANSCRIPTION_MIN_DURATION_MS } from '../services/voiceTranscriptionGuard';
 import {
   playAudioUriOnce,
   stopOneShotAudioPlayback,
@@ -62,8 +64,15 @@ import {
 import {
   normalizeConversationContinuityMap,
   selectConversationContinuityFollowUp,
+  transitionConversationMeetingHandoff,
   updateConversationContinuity,
 } from '../services/conversationContinuityRuntime';
+import {
+  createLocalMeetingHandoffDraft,
+  prepareMeetingHandoffDraft,
+} from '../services/meetingHandoffRuntime';
+import type { MeetingHandoffDraft } from '../features/meeting/ui/meeting-ui-types';
+import { getMeetingCopy } from '../features/meeting/meeting-copy';
 import {
   createInitialProactiveSchedule,
   createLocalProactiveMessage,
@@ -73,6 +82,7 @@ import {
   selectDueProactiveCandidate,
   selectProactiveFocusEvent,
 } from '../services/proactiveChatRuntime';
+import type { RemoteProactiveEnvelope } from '../services/remoteProactiveRuntime';
 import {
   createInitialMomentSchedule,
   createLocalMomentDraft,
@@ -104,6 +114,7 @@ import {
   DEFAULT_THEME_CONFIG,
 } from '../constants/defaults';
 import { isWallpaperId } from '../services/theme';
+import { normalizeMeetingConfig } from '../features/meeting/domain/meeting-config';
 import {
   correctRelationshipTrace,
   createRelationshipTrace,
@@ -501,6 +512,7 @@ const activeMomentReactionIds = new Set<string>();
 export interface SendChatMessageOptions {
   textOverride?: string;
   skipUserAppend?: boolean;
+  skipDeliverySchedule?: boolean;
   sourceMessageId?: number;
   targetChatId?: string;
   retryMessageIds?: number[];
@@ -634,6 +646,11 @@ export interface NanaStore {
   presetMode: string;
   editingPreset: Preset | null;
 
+  // Transient: Meeting navigation. Scene/turn data stays in its repository.
+  meetingPage: 'list' | 'create' | 'handoff' | 'scene' | 'summary';
+  activeMeetingSceneId: string | null;
+  pendingMeetingHandoffDraft: MeetingHandoffDraft | null;
+
   // Transient: WeChat navigation
   weChatTab: WeChatTab;
   weChatPage: WeChatPage;
@@ -704,6 +721,8 @@ export interface NanaStore {
 
   // Actions
   setActiveApp: (app: string | null) => void;
+  openMeetingHandoff: (chatId: string, mode?: 'automatic' | 'manual') => Promise<void>;
+  dismissMeetingHandoff: (characterId: string) => void;
   goBack: () => boolean;
   setWalletBalance: (value: string) => boolean;
   setCharacterProactiveMessagingEnabled: (characterId: string, enabled: boolean) => void;
@@ -735,6 +754,9 @@ export interface NanaStore {
   reconcilePayments: (now?: number) => Promise<void>;
   reconcileChatDeliveryStates: (now?: number) => void;
   runProactiveChatHeartbeat: (now?: number) => Promise<void>;
+  receiveRemoteProactiveMessage: (
+    envelope: RemoteProactiveEnvelope,
+  ) => 'committed' | 'duplicate' | 'rejected';
   runProactiveMomentsHeartbeat: (now?: number) => Promise<void>;
   retryChatMessage: (errorMessageId: number) => Promise<void>;
   startOutgoingCall: (type: 'voice' | 'video') => void;
@@ -752,7 +774,7 @@ export interface NanaStore {
   syncTempState: () => void;
 }
 
-export const NANA_PERSIST_VERSION = 14;
+export const NANA_PERSIST_VERSION = 15;
 
 type PersistedStateRecord = Record<string, unknown>;
 
@@ -877,6 +899,40 @@ const normalizeThemeConfig = (value: unknown): ThemeConfig => {
   };
 };
 
+const normalizePresetList = (
+  value: unknown,
+  sceneMode: 'online' | 'offline',
+): Preset[] => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate): Preset[] => {
+    if (!isPersistedStateRecord(candidate)) return [];
+    if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') return [];
+    const normalizePromptList = (promptValue: unknown) => (
+      Array.isArray(promptValue)
+        ? promptValue.filter((entry): entry is string => typeof entry === 'string').slice(0, 16)
+        : []
+    );
+    return [{
+      id: candidate.id,
+      name: candidate.name.slice(0, 120),
+      sceneMode,
+      sceneDescription: typeof candidate.sceneDescription === 'string'
+        ? candidate.sceneDescription.slice(0, 4_000)
+        : '',
+      main: normalizePromptList(candidate.main),
+      jailbreak: normalizePromptList(candidate.jailbreak),
+      authorsNote: normalizePromptList(candidate.authorsNote),
+      authorsNoteDepth: typeof candidate.authorsNoteDepth === 'number'
+        && Number.isFinite(candidate.authorsNoteDepth)
+        ? Math.max(0, Math.min(64, Math.floor(candidate.authorsNoteDepth)))
+        : 0,
+      ...(sceneMode === 'offline'
+        ? { meetingConfig: normalizeMeetingConfig(candidate.meetingConfig) }
+        : {}),
+    }];
+  });
+};
+
 export function migrateNanaPersistedState(persistedState: unknown): PersistedStateRecord {
   const redacted = redactSecrets(persistedState);
   const state = isPersistedStateRecord(redacted) ? redacted : {};
@@ -896,6 +952,12 @@ export function migrateNanaPersistedState(persistedState: unknown): PersistedSta
       : '',
     ...(Array.isArray(state.characters)
       ? { characters: state.characters.map(normalizeCharacter) }
+      : {}),
+    ...(Array.isArray(state.onlinePresets)
+      ? { onlinePresets: normalizePresetList(state.onlinePresets, 'online') }
+      : {}),
+    ...(Array.isArray(state.offlinePresets)
+      ? { offlinePresets: normalizePresetList(state.offlinePresets, 'offline') }
       : {}),
     momentsList: normalizeMoments(state.momentsList),
     stickers: normalizeStickerAssets(state.stickers),
@@ -1088,6 +1150,10 @@ export const useNanaStore = create<NanaStore>()(
       presetMode: 'online',
       editingPreset: null,
 
+      meetingPage: 'list',
+      activeMeetingSceneId: null,
+      pendingMeetingHandoffDraft: null,
+
       weChatTab: 'chats',
       weChatPage: 'root',
       activeChatId: null,
@@ -1169,6 +1235,7 @@ export const useNanaStore = create<NanaStore>()(
             callOverlay: emptyCallOverlay,
             selectMode: false, selectedMsgIds: [], selectTargetCharId: null,
             presetView: 'list',
+            meetingPage: 'list', activeMeetingSceneId: null, pendingMeetingHandoffDraft: null,
           });
         } else {
           const state = get();
@@ -1186,6 +1253,8 @@ export const useNanaStore = create<NanaStore>()(
 
           if (app === 'presets') {
             set({ activeApp: app, presetView: 'list', ...returnPatch });
+          } else if (app === 'meeting') {
+            set({ activeApp: app, meetingPage: 'list', activeMeetingSceneId: null, pendingMeetingHandoffDraft: null, ...returnPatch });
           } else if (app === 'settings') {
             set({
               activeApp: app,
@@ -1212,6 +1281,73 @@ export const useNanaStore = create<NanaStore>()(
             }
           }
         }
+      },
+
+      openMeetingHandoff: async (chatId, mode = 'manual') => {
+        const state = get();
+        const meetingCopy = getMeetingCopy(state.themeConfig.language);
+        const character = state.characters.find(candidate => candidate.id === chatId);
+        const presetId = state.activeOfflinePresetId || state.offlinePresets[0]?.id || '';
+        if (!character || !presetId) {
+          set({
+            islandNotification: {
+              title: meetingCopy.goToMeeting,
+              desc: !character ? meetingCopy.currentCharacterMissing : meetingCopy.createOfflinePresetFirst,
+              status: 'error',
+            },
+          });
+          return;
+        }
+        const existingHandoff = state.conversationContinuityByCharacter[chatId]?.meetingHandoff;
+        if (mode === 'automatic' && existingHandoff?.state === 'started' && existingHandoff.sceneId) {
+          get().setActiveApp('meeting');
+          set({ meetingPage: 'scene', activeMeetingSceneId: existingHandoff.sceneId });
+          return;
+        }
+        const fallback = createLocalMeetingHandoffDraft({
+          chatId,
+          characterId: character.id,
+          characterName: character.name,
+          messages: state.chatHistory[chatId] || [],
+          presetId,
+          existingHandoff,
+          language: state.themeConfig.language,
+        });
+        get().setActiveApp('meeting');
+        set({
+          meetingPage: 'handoff',
+          activeMeetingSceneId: null,
+          pendingMeetingHandoffDraft: mode === 'manual' && state.apiKey.trim()
+            ? { ...fallback, preparing: true }
+            : fallback,
+        });
+        if (mode !== 'manual' || !state.apiKey.trim()) return;
+        const prepared = await prepareMeetingHandoffDraft({
+          fallback,
+          messages: state.chatHistory[chatId] || [],
+          characterName: character.name,
+          userName: state.myName,
+          apiUrl: state.apiUrl,
+          apiKey: state.apiKey,
+          selectedModel: state.selectedModel,
+          language: state.themeConfig.language,
+        });
+        set(current => current.pendingMeetingHandoffDraft?.chatId === chatId
+          ? { pendingMeetingHandoffDraft: { ...prepared, preparing: false } }
+          : {});
+      },
+
+      dismissMeetingHandoff: (characterId) => {
+        set(state => {
+          const current = state.conversationContinuityByCharacter[characterId];
+          const updated = transitionConversationMeetingHandoff(current, 'dismissed');
+          return updated ? {
+            conversationContinuityByCharacter: {
+              ...state.conversationContinuityByCharacter,
+              [characterId]: updated,
+            },
+          } : {};
+        });
       },
 
       goBack: () => {
@@ -1305,6 +1441,11 @@ export const useNanaStore = create<NanaStore>()(
 
         if (state.activeApp === 'presets' && state.presetView !== 'list') {
           set({ presetView: 'list', editingPreset: null });
+          return true;
+        }
+
+        if (state.activeApp === 'meeting' && state.meetingPage !== 'list') {
+          set({ meetingPage: 'list', activeMeetingSceneId: null, pendingMeetingHandoffDraft: null });
           return true;
         }
 
@@ -2532,6 +2673,7 @@ export const useNanaStore = create<NanaStore>()(
           || (joiningUserBurst && pendingRequestId
             ? pendingRequestId
             : `reply:${chatId}:${sourceMessageId}:${interactionAt}`);
+        let continuitySourceMessageIds = [sourceMessageId];
         const deliveryMessageIds = options?.retryMessageIds?.length
           ? [...new Set(options.retryMessageIds)]
           : [messageId];
@@ -2566,6 +2708,7 @@ export const useNanaStore = create<NanaStore>()(
             audioUri: voiceDraft.audioUri,
             audioDurationSec: voiceDraft.audioDurationSec,
             transcript: voiceDraft.transcript,
+            voiceTranscriptionStatus: voiceDraft.transcript ? 'ready' : 'pending',
             replyMode: voiceDraft.replyMode,
           } : {}),
           ...(type === 'image' && finalizedMediaCapture?.localUri ? {
@@ -2643,11 +2786,13 @@ export const useNanaStore = create<NanaStore>()(
             : { chatPanel: 'none' as ChatPanel }),
         }));
 
-        for (const deliveryMessageId of deliveryMessageIds) {
-          const deliveryMessage = (get().chatHistory[chatId] || [])
-            .find(message => message.id === deliveryMessageId);
-          if (deliveryMessage) {
-            scheduleOutgoingMessageDelivery(chatId, chatId, deliveryMessage, fastChat);
+        if (!options?.skipDeliverySchedule) {
+          for (const deliveryMessageId of deliveryMessageIds) {
+            const deliveryMessage = (get().chatHistory[chatId] || [])
+              .find(message => message.id === deliveryMessageId);
+            if (deliveryMessage) {
+              scheduleOutgoingMessageDelivery(chatId, chatId, deliveryMessage, fastChat);
+            }
           }
         }
 
@@ -2695,12 +2840,28 @@ export const useNanaStore = create<NanaStore>()(
             ? transcriptCapture.transcript?.trim()
             : undefined;
           if (!transcript) {
+            const localSpeechRejected = transcriptCapture.errorCode === 'noSpeechDetected'
+              || transcriptCapture.errorCode === 'audioTooShort';
             // The audio message was already persisted and entered the normal
             // delivery lifecycle before transcription began. STT is an
             // enrichment step for the character reply, not message transport;
             // a provider/upload failure must not turn a playable voice bubble
             // into a red "send failed" state.
             set(s => ({
+              chatHistory: {
+                ...s.chatHistory,
+                [chatId]: (s.chatHistory[chatId] || []).map(message => (
+                  message.id === messageId
+                    ? {
+                        ...message,
+                        voiceTranscriptionStatus: localSpeechRejected ? 'unavailable' : 'failed',
+                        voiceTranscriptionError: localSpeechRejected
+                          ? undefined
+                          : transcriptCapture.errorMessage || copy.voiceTranscriptionFailed,
+                      }
+                    : message
+                )),
+              },
               relationshipTraces: upsertRelationshipTrace(s.relationshipTraces, createRelationshipTrace({
                 characterId: chatId,
                 source: 'voiceMessage',
@@ -2708,18 +2869,20 @@ export const useNanaStore = create<NanaStore>()(
                 title: copy.voiceMessage,
                 summary: initialSummary,
                 mediaUris: finalizedMediaCapture.localUri ? [finalizedMediaCapture.localUri] : undefined,
-                remember: true,
-                recallWeight: 0.45,
-                state: 'failed',
+                remember: !localSpeechRejected,
+                recallWeight: localSpeechRejected ? 0.1 : 0.45,
+                state: localSpeechRejected ? 'ignored' : 'failed',
               })),
               islandNotification: {
                 title: activeChar?.name || copy.voiceMessage,
-                desc: transcriptCapture.errorMessage || copy.voiceTranscriptionFailed,
+                desc: localSpeechRejected
+                  ? copy.noSpeechDetected
+                  : transcriptCapture.errorMessage || copy.voiceTranscriptionFailed,
                 icon: activeChar?.avatar,
-                status: 'error',
+                ...(localSpeechRejected ? {} : { status: 'error' as const }),
               },
             }));
-            triggerHaptic('error');
+            triggerHaptic(localSpeechRejected ? 'light' : 'error');
             setTimeout(() => useNanaStore.setState({ islandNotification: null }), 2600);
             return;
           }
@@ -2732,7 +2895,13 @@ export const useNanaStore = create<NanaStore>()(
               ...s.chatHistory,
               [chatId]: (s.chatHistory[chatId] || []).map(message => (
                 message.id === messageId
-                  ? { ...message, text: transcript, transcript }
+                  ? {
+                      ...message,
+                      text: transcript,
+                      transcript,
+                      voiceTranscriptionStatus: 'ready',
+                      voiceTranscriptionError: undefined,
+                    }
                   : message
               )),
             },
@@ -2825,6 +2994,7 @@ export const useNanaStore = create<NanaStore>()(
             if (!burstItems || !isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
             cancelUserMessageBurst(chatId, requestId);
             userText = burstItems.map(item => item.text).join('\n');
+            continuitySourceMessageIds = burstItems.map(item => item.sourceMessageId);
           }
           await waitForOutgoingTurnReadWindow(chatId, chatId, requestId, fastChat);
           if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
@@ -2887,7 +3057,7 @@ export const useNanaStore = create<NanaStore>()(
             ? createCharacterVoiceReplyDraft(activeChar, normalizedReplyText, charReplyMode)
             : null;
 
-          if (replyType === 'voice') {
+          if (replyType === 'voice' && charVoiceDraft) {
             const voiceProvider = resolveVoiceProvider({
               voiceProviderEnabled: state.voiceProviderEnabled,
               voiceApiUrl: state.voiceApiUrl,
@@ -2948,6 +3118,7 @@ export const useNanaStore = create<NanaStore>()(
           });
 
           let didCommitAll = false;
+          const committedReplyMessageIds: number[] = [];
           for (const [messageIndex, messageText] of deliveryMessages.entries()) {
             if (messageIndex > 0) {
               await waitForCharacterFollowUp({
@@ -2960,6 +3131,7 @@ export const useNanaStore = create<NanaStore>()(
             if (!isCurrentChatRequest(get().pendingChatRequests, chatId, requestId)) return;
 
             const isLastMessage = messageIndex === deliveryMessages.length - 1;
+            const replyMessageId = nextMessageId();
             let didCommitMessage = false;
             set(s => {
               if (!isCurrentChatRequest(s.pendingChatRequests, chatId, requestId)) return {};
@@ -3013,6 +3185,11 @@ export const useNanaStore = create<NanaStore>()(
                         userText,
                         characterText: normalizedReplyText,
                         modelPatch: continuityPatch,
+                        sourceMessageIds: [
+                          ...continuitySourceMessageIds,
+                          ...committedReplyMessageIds,
+                          replyMessageId,
+                        ],
                         now: completedAt,
                       },
                     ),
@@ -3021,7 +3198,7 @@ export const useNanaStore = create<NanaStore>()(
                 chatHistory: {
                   ...s.chatHistory,
                   [chatId]: [...(s.chatHistory[chatId] || []), {
-                    id: nextMessageId(),
+                    id: replyMessageId,
                     sender: 'char',
                     text: messageText,
                     time: replyTime,
@@ -3044,6 +3221,7 @@ export const useNanaStore = create<NanaStore>()(
               };
             });
             if (!didCommitMessage) return;
+            committedReplyMessageIds.push(replyMessageId);
             if (!isLastMessage) triggerHaptic('light');
           }
           if (!didCommitAll) return;
@@ -3108,7 +3286,7 @@ export const useNanaStore = create<NanaStore>()(
           set({
             islandNotification: {
               title: activeChar?.name || 'AI',
-              desc: replyType === 'voice' ? copy.newVoiceMessage : copy.newMessage,
+              desc: charVoiceDraft ? copy.newVoiceMessage : copy.newMessage,
               icon: activeChar?.avatar,
               status: 'success',
             },
@@ -3352,6 +3530,99 @@ export const useNanaStore = create<NanaStore>()(
         }
       },
 
+      receiveRemoteProactiveMessage: (envelope) => {
+        const turnId = `remote-proactive:${envelope.eventId}`;
+        const messageTexts = splitCharacterReplyIntoMessages(envelope.text);
+        if (messageTexts.length === 0) return 'rejected';
+
+        let result: 'committed' | 'duplicate' | 'rejected' = 'rejected';
+        let didCommit = false;
+        set(current => {
+          const character = current.characters.find(item => item.id === envelope.characterId);
+          if (
+            !character
+            || !current.friends.includes(envelope.characterId)
+            || current.blockedUsers.includes(envelope.characterId)
+            || character.proactiveMessagingEnabled === false
+            || character.proactiveMessagingFrequency === 'off'
+          ) return {};
+
+          const history = current.chatHistory[envelope.characterId] || [];
+          if (history.some(message => message.turnId === turnId)) {
+            result = 'duplicate';
+            return {};
+          }
+
+          const receivedAt = Date.now();
+          const schedule = current.proactiveChatSchedules[envelope.characterId]
+            || createInitialProactiveSchedule(
+              envelope.characterId,
+              receivedAt,
+              character.proactiveMessagingFrequency || 'normal',
+            );
+          result = 'committed';
+          didCommit = true;
+          return {
+            chatHistory: {
+              ...current.chatHistory,
+              [envelope.characterId]: [
+                ...history,
+                ...messageTexts.map(messageText => ({
+                  id: nextMessageId(),
+                  sender: 'char',
+                  text: messageText,
+                  time: new Date(envelope.generatedAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }),
+                  type: 'text' as MessageType,
+                  generationSource: 'proactive' as const,
+                  createdAt: envelope.generatedAt,
+                  turnId,
+                })),
+              ],
+            },
+            proactiveChatSchedules: {
+              ...current.proactiveChatSchedules,
+              [envelope.characterId]: rescheduleAfterProactiveMessage(
+                schedule,
+                envelope.characterId,
+                receivedAt,
+                undefined,
+                character.proactiveMessagingFrequency || 'normal',
+              ),
+            },
+            unreadCounts: {
+              ...current.unreadCounts,
+              [envelope.characterId]: unreadAfterRemoteEvent(current, envelope.characterId),
+            },
+            conversationContinuityByCharacter: {
+              ...current.conversationContinuityByCharacter,
+              [envelope.characterId]: updateConversationContinuity(
+                current.conversationContinuityByCharacter[envelope.characterId],
+                {
+                  characterId: envelope.characterId,
+                  turnId,
+                  userText: '',
+                  characterText: messageTexts.join(' '),
+                  now: receivedAt,
+                },
+              ),
+            },
+            islandNotification: {
+              title: character.name,
+              desc: runtimeCopyFor(current.themeConfig.language).newMessage,
+              icon: character.avatar,
+              status: 'success' as const,
+            },
+          };
+        });
+        if (didCommit) {
+          setTimeout(() => useNanaStore.setState({ islandNotification: null }), 3000);
+        }
+        return result;
+      },
+
       runProactiveMomentsHeartbeat: async (now = Date.now()) => {
         if (proactiveMomentHeartbeatInFlight) return;
         proactiveMomentHeartbeatInFlight = true;
@@ -3505,6 +3776,49 @@ export const useNanaStore = create<NanaStore>()(
         const chatId = state.activeChatId;
         if (!chatId || state.pendingChatRequests[chatId]) return;
         const history = state.chatHistory[chatId] || [];
+        const failedVoiceTranscription = history.find(message => (
+          message.id === errorMessageId
+          && message.sender === 'user'
+          && message.type === 'voice'
+          && message.voiceTranscriptionStatus === 'failed'
+          && !!message.audioUri
+        ));
+        if (failedVoiceTranscription?.audioUri) {
+          const retryCapture: MediaCaptureResult = {
+            phase: 'processing',
+            mediaKind: 'audio',
+            localUri: failedVoiceTranscription.audioUri,
+            durationSec: failedVoiceTranscription.audioDurationSec || 1,
+          };
+          set(current => ({
+            chatHistory: {
+              ...current.chatHistory,
+              [chatId]: (current.chatHistory[chatId] || []).map(message => (
+                message.id === failedVoiceTranscription.id
+                  ? {
+                      ...message,
+                      voiceTranscriptionStatus: 'pending',
+                      voiceTranscriptionError: undefined,
+                    }
+                  : message
+              )),
+            },
+          }));
+          await get().sendChatMessage(
+            'voice',
+            failedVoiceTranscription.amount,
+            undefined,
+            retryCapture,
+            {
+              textOverride: '',
+              skipUserAppend: true,
+              skipDeliverySchedule: true,
+              sourceMessageId: failedVoiceTranscription.id,
+              turnIdOverride: failedVoiceTranscription.turnId,
+            },
+          );
+          return;
+        }
         const failedMessage = history.find(message => (
           message.id === errorMessageId
           && message.sender === 'user'
@@ -3856,6 +4170,7 @@ export const useNanaStore = create<NanaStore>()(
             selectedModel: voiceProvider.stt.model,
             sttModel: voiceProvider.stt.model,
             language: state.speechLanguage || 'zh-CN',
+            minimumDurationMillis: VOICE_CALL_TRANSCRIPTION_MIN_DURATION_MS,
             signal: requestController.signal,
           });
 
@@ -3940,7 +4255,7 @@ export const useNanaStore = create<NanaStore>()(
           const replyType = currentOverlay.characterOutput === 'captionsOnly' ? 'text' : 'voice';
           let replyCapture = resolveSpeechToTextResult({ transcript: replyText });
 
-          if (replyType === 'voice') {
+          if (replyType === 'voice' && toSpeakableText(replyText)) {
             const speechAudio = await synthesizeSpeechAudio({
               text: replyText,
               apiUrl: voiceProvider.tts.apiUrl,

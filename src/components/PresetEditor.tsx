@@ -4,7 +4,12 @@ import { Trash2 } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Preset } from '../types';
+import {
+  DEFAULT_MEETING_CONFIG,
+  normalizeMeetingConfig,
+} from '../features/meeting/domain/meeting-config';
 import { AnimatedPressable } from './primitives';
+import { MeetingPresetConfigEditor } from './meeting-preset-config-editor';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 
 interface PresetEditorFormProps {
@@ -67,6 +72,9 @@ function PresetEditorForm({ editingPreset }: PresetEditorFormProps) {
   const [main, setMain] = useState(editingPreset?.main?.[0] || '');
   const [jailbreak, setJailbreak] = useState(editingPreset?.jailbreak?.[0] || '');
   const [authorsNote, setAuthorsNote] = useState(editingPreset?.authorsNote?.[0] || '');
+  const [meetingConfig, setMeetingConfig] = useState(() => normalizeMeetingConfig(
+    editingPreset?.meetingConfig || DEFAULT_MEETING_CONFIG,
+  ));
 
   const handleSave = () => {
     if (!name.trim()) return;
@@ -80,6 +88,9 @@ function PresetEditorForm({ editingPreset }: PresetEditorFormProps) {
       jailbreak: [jailbreak.trim()],
       authorsNote: [authorsNote.trim()],
       authorsNoteDepth: editingPreset?.authorsNoteDepth ?? 0,
+      ...(presetMode === 'offline'
+        ? { meetingConfig: normalizeMeetingConfig(meetingConfig) }
+        : {}),
     };
     const isOnline = presetMode === 'online';
     const list = isOnline ? onlinePresets : offlinePresets;
@@ -117,6 +128,9 @@ function PresetEditorForm({ editingPreset }: PresetEditorFormProps) {
         </Text>
       </NeumorphicSurface>
       <PresetField label={t.sceneDescription} value={sceneDescription} onChangeText={setSceneDescription} placeholder={t.sceneDescription} multiline />
+      {presetMode === 'offline' ? (
+        <MeetingPresetConfigEditor value={meetingConfig} onChange={setMeetingConfig} mainPrompt={main} />
+      ) : null}
       <PresetField label={(t as any).mainPrompt} value={main} onChangeText={setMain} placeholder={t.mainPrompt} multiline />
       <PresetField label={(t as any).jailbreakPrompt} value={jailbreak} onChangeText={setJailbreak} placeholder={t.jailbreakPrompt} multiline />
       <PresetField label={(t as any).authorsNote} value={authorsNote} onChangeText={setAuthorsNote} placeholder={t.authorsNote} multiline />

@@ -74,6 +74,7 @@ yarn-error.*
 /assets/generated/nana-neumorphic-icons-v1/*
 !/assets/generated/nana-neumorphic-icons-v1/master-kuromi.png
 !/assets/generated/nana-neumorphic-icons-v1/wechat.png
+!/assets/generated/nana-neumorphic-icons-v1/meeting-v2.png
 !/assets/generated/nana-neumorphic-icons-v1/worldbook.png
 !/assets/generated/nana-neumorphic-icons-v1/presets.png
 !/assets/generated/nana-neumorphic-icons-v1/settings.png

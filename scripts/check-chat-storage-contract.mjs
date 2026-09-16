@@ -13,7 +13,7 @@ const partializeEnd = storeSource.indexOf('export const useNanaStore', partializ
 const partializeSource = storeSource.slice(partializeStart, partializeEnd);
 expect(partializeStart >= 0 && partializeEnd > partializeStart, 'persisted-state selector must exist');
 expect(!partializeSource.includes('chatHistory: state.chatHistory'), 'chat history must not be duplicated in the Zustand JSON payload');
-expect(storeSource.includes('NANA_PERSIST_VERSION = 14'), 'voice, identity, time zone, and proactive cadence migrations require storage version 14');
+expect(storeSource.includes('NANA_PERSIST_VERSION = 15'), 'meeting preset migration requires storage version 15');
 
 const nativeRepository = read('src/repositories/chatMessageRepository.native.ts');
 for (const required of [
@@ -48,6 +48,24 @@ expect(chatViewSource.includes('startRenderingFromBottom: true'), 'chat renderin
 expect(chatViewSource.includes('animateAutoScrollToBottom: false'), 'opening a chat must not animate down through old messages');
 expect(!chatViewSource.includes('{messages.map('), 'chat rendering must not mount every message with Array.map');
 expect(chatViewSource.includes('__NANA_SMOKE_SEED_LONG_CHAT__'), 'long-chat recycling must have a deterministic smoke path');
+expect(chatViewSource.includes('CHAT_READABILITY_SCRIM'), 'chat must keep one stable semantic readability scrim over SkyScene');
+expect(chatViewSource.includes('testID="chat-readability-scrim"'), 'chat readability scrim must remain independent from list state');
+expect(chatViewSource.includes('preparedHistoryChatId'), 'chat re-entry must track which history viewport has completed FlashList layout');
+expect(chatViewSource.includes("'chat-history-frame-preparing'"), 'incomplete history layout must stay atomically concealed');
+expect(chatViewSource.includes("'chat-history-frame-ready'"), 'completed history layout must expose a deterministic ready frame');
+expect(chatViewSource.includes('opacity: historyFrameReady ? 1 : 0'), 'chat history visibility must switch in one commit without a fade animation');
+expect(chatViewSource.includes('onContentSizeChange={() =>') && chatViewSource.includes('commitStableHistoryFrame()'), 'chat entry must wait for post-load content measurements before exposing the viewport');
+expect(chatViewSource.includes('initialScrollChatId.current === activeChatId'), 'the initial newest-message correction must run at most once per chat entry');
+expect(chatViewSource.includes('if (initialScrollChatId.current !== activeChatId)'), 'voice transcript height changes must preserve the current reading position');
+expect(!chatViewSource.includes('autoscrollToBottomThreshold'), 'layout-only bubble changes must not trigger FlashList bottom autoscroll');
+expect(chatViewSource.includes('disabled: historyFrameReady'), 'FlashList scroll anchoring must stop after the initial chat frame is ready');
+expect(chatViewSource.includes('requestAnimationFrame(() =>') && chatViewSource.includes('scrollToEnd({ animated: false })'), 'chat entry must settle its newest-message position without a visible sweep');
+
+const wechatRootSource = read('src/components/WeChatRootView.tsx');
+expect(wechatRootSource.includes('retainedChatId'), 'the latest chat viewport must survive navigation away from the chat page');
+expect(wechatRootSource.includes('<ChatView chatId={renderedChatId} />'), 'the retained chat tree must reuse the same message viewport');
+const homeSource = read('src/screens/home/index.tsx');
+expect(homeSource.includes('wechatMounted') && homeSource.includes('<WeChatRootView />'), 'the WeChat tree must remain mounted while other simulated-phone surfaces are open');
 
 const packageJson = JSON.parse(read('package.json'));
 expect(packageJson.dependencies?.['expo-sqlite'] === '~55.0.18', 'Expo SDK 55 SQLite version must stay aligned');

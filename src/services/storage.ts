@@ -28,9 +28,18 @@ import {
   readDurableChatHistory,
   replaceDurableChatHistory,
 } from './chatHistoryPersistence';
+import {
+  clearMeetingRepository,
+  exportMeetingRepositoryArchive,
+  importMeetingRepositoryArchive,
+} from '../repositories/meetingRepository';
+import {
+  normalizeMeetingRepositoryArchive,
+  type MeetingRepositoryArchive,
+} from '../features/meeting/data/meetingRepositoryProtocol';
 
 const EXPORT_FORMAT = 'nana-export';
-const EXPORT_VERSION = 2;
+const EXPORT_VERSION = 3;
 const MAX_IMPORT_CHARACTERS = 5 * 1024 * 1024;
 const MAX_IMPORT_KEYS = 32;
 export const MAX_AVATAR_MANIFEST_ENTRIES = 64;
@@ -81,6 +90,7 @@ export interface NanaExportDocument {
   exportedAt: string;
   data: Record<string, unknown>;
   avatarMedia?: NanaAvatarMediaManifest;
+  meetingArchive?: MeetingRepositoryArchive;
 }
 
 export interface NanaAvatarMediaEntry {
@@ -100,6 +110,7 @@ export interface NanaAvatarMediaManifest {
 export interface ParsedImportBundle {
   entries: ImportEntry[];
   avatarMedia?: NanaAvatarMediaManifest;
+  meetingArchive?: MeetingRepositoryArchive;
 }
 
 const isRecord = (value: unknown): value is JsonRecord => (
@@ -304,6 +315,7 @@ export function createExportDocument(
   storedValues: Record<string, unknown>,
   exportedAt = new Date().toISOString(),
   avatarMedia?: NanaAvatarMediaManifest,
+  meetingArchive?: MeetingRepositoryArchive,
 ): NanaExportDocument {
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(storedValues)) {
@@ -316,6 +328,7 @@ export function createExportDocument(
     exportedAt,
     data,
     ...(avatarMedia && avatarMedia.avatars.length > 0 ? { avatarMedia } : {}),
+    ...(meetingArchive ? { meetingArchive } : {}),
   };
 }
 
@@ -418,22 +431,29 @@ export function parseImportBundle(jsonText: string): ParsedImportBundle {
 
   let data: JsonRecord;
   let avatarMedia: NanaAvatarMediaManifest | undefined;
-  let isV2Envelope = false;
+  let meetingArchive: MeetingRepositoryArchive | undefined;
+  let supportsAvatarMedia = false;
   if ('format' in parsed || 'data' in parsed) {
     if (
       parsed.format !== EXPORT_FORMAT
-      || (parsed.version !== 1 && parsed.version !== EXPORT_VERSION)
+      || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== EXPORT_VERSION)
       || !isRecord(parsed.data)
     ) {
       throw new Error('The Nana export envelope is invalid or unsupported.');
     }
     data = parsed.data;
-    isV2Envelope = parsed.version === EXPORT_VERSION;
+    supportsAvatarMedia = parsed.version === 2 || parsed.version === EXPORT_VERSION;
     if (parsed.version === 1 && parsed.avatarMedia !== undefined) {
       throw new Error('Avatar media is only supported by Nana v2 exports.');
     }
-    avatarMedia = parsed.version === EXPORT_VERSION
+    avatarMedia = supportsAvatarMedia
       ? validateAvatarMedia(parsed.avatarMedia)
+      : undefined;
+    if (parsed.version !== EXPORT_VERSION && parsed.meetingArchive !== undefined) {
+      throw new Error('Meeting scenes are only supported by Nana v3 exports.');
+    }
+    meetingArchive = parsed.version === EXPORT_VERSION && parsed.meetingArchive !== undefined
+      ? normalizeMeetingRepositoryArchive(parsed.meetingArchive)
       : undefined;
   } else {
     data = parsed;
@@ -468,7 +488,7 @@ export function parseImportBundle(jsonText: string): ParsedImportBundle {
   const avatarReferences = isRecord(normalizedRoot.state)
     ? collectAvatarReferences(normalizedRoot.state)
     : new Set<string>();
-  if (isV2Envelope) {
+  if (supportsAvatarMedia) {
     validateInlineAvatarLimits(
       [...avatarReferences],
       avatarMedia?.avatars.length || 0,
@@ -489,7 +509,7 @@ export function parseImportBundle(jsonText: string): ParsedImportBundle {
       }
     }
   }
-  return { entries, avatarMedia };
+  return { entries, avatarMedia, meetingArchive };
 }
 
 export function parseImportDocument(jsonText: string): ImportEntry[] {
@@ -567,6 +587,7 @@ async function restoreBackup(backup: readonly (readonly [string, string | null])
 export async function applyImportWithRollback(bundle: ParsedImportBundle): Promise<void> {
   const prepared = prepareAvatarMediaImport(bundle);
   const durableChatBackup = await readDurableChatHistory();
+  const meetingBackup = await exportMeetingRepositoryArchive();
   let succeeded = false;
   try {
     const keys = prepared.entries.map(([key]) => key);
@@ -579,12 +600,18 @@ export async function applyImportWithRollback(bundle: ParsedImportBundle): Promi
       }
       await replaceDurableChatHistory(useNanaStore.getState().chatHistory);
       await flushDurableChatHistory();
+      if (bundle.meetingArchive) {
+        await importMeetingRepositoryArchive(bundle.meetingArchive);
+      } else {
+        await clearMeetingRepository();
+      }
     } catch (error) {
       try {
         await restoreBackup(backup);
         await useNanaStore.persist.rehydrate();
         await replaceDurableChatHistory(durableChatBackup);
         useNanaStore.setState({ chatHistory: durableChatBackup });
+        await importMeetingRepositoryArchive(meetingBackup);
       } catch {
         throw new Error('Import failed and Nana could not restore the previous local backup. Restart the app before making more changes.');
       }
@@ -608,6 +635,7 @@ export async function applyImportWithRollback(bundle: ParsedImportBundle): Promi
 export async function exportData(): Promise<void> {
   try {
     const durableChatHistory = await readDurableChatHistory();
+    const meetingArchive = await exportMeetingRepositoryArchive();
     const allKeys = await AsyncStorage.getAllKeys();
     const nanaKeys = Array.from(new Set([
       NANA_ROOT_STORAGE_KEY,
@@ -638,7 +666,12 @@ export async function exportData(): Promise<void> {
     };
 
     const avatarMedia = await createAvatarMediaManifest(storedValues);
-    const document = createExportDocument(storedValues, new Date().toISOString(), avatarMedia);
+    const document = createExportDocument(
+      storedValues,
+      new Date().toISOString(),
+      avatarMedia,
+      meetingArchive,
+    );
     const json = JSON.stringify(document, null, 2);
     await Share.share({ message: json, title: 'Nana Export Data' });
   } catch (error) {
@@ -677,6 +710,7 @@ export async function clearAllData(): Promise<void> {
 
   const initialState = useNanaStore.getInitialState();
   await replaceDurableChatHistory(initialState.chatHistory);
+  await clearMeetingRepository();
   useNanaStore.setState(initialState, true);
   await flushDurableChatHistory();
 }

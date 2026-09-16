@@ -100,14 +100,38 @@ baked interaction layers.
   trusted correction exactly once.
 - In-flight memory summarization and consolidation use an invalidation guard,
   so a result started before a correction cannot restore stale facts.
-- Every trace records its product origin. Current events default to online
-  WeChat; `offlineScene` and an offline-meeting origin are reserved for the
-  future standalone Nana app without implementing its scene state yet.
+- Every trace records its product origin. Current online events default to
+  WeChat, while completed Meeting memories use the `offlineScene` source and
+  `offlineMeeting` origin without exposing raw scene state to the shared brain.
 - Remembered digested traces are injected into `buildAiContext` as the
   relationship timeline.
 - `memoryWindowSize` now controls both unsummarized chat-memory records and
   relationship-trace recall instead of being persisted but ignored.
 - Local raw-memory forwarding works without an API key.
+
+### Offline Meeting Vertical Slice
+
+- Meeting is a standalone simulated-phone app with its own scene list, manual
+  creation flow, and chat-to-meeting handoff for one to four characters.
+- Each scene owns an immutable preset snapshot, structured turns, status
+  checkpoints, mini-theater blocks, edit/retry actions, and an explicit
+  completed or abandoned lifecycle.
+- Native scenes are durable in Expo SQLite. Web smoke tests use an isolated
+  AsyncStorage repository behind the same protocol.
+- Ending a scene opens a review step. Only the memory drafts selected by the
+  user become idempotent `offlineScene` relationship traces; raw turns remain
+  in the Meeting repository and are not injected directly into chat context.
+- Local deterministic generation keeps the complete flow testable without an
+  API key, while the model adapter remains behind the existing AI boundary.
+- Meeting list, creation, handoff, scene, review, status, errors, and
+  accessibility labels support both English and Simplified Chinese.
+- Meeting now restores the latest act on entry, keeps current status fixed
+  above the reading list, shows each character identity only once per turn,
+  and generates a separate one-to-two-line poetic epigraph instead of
+  promoting or removing the first narration paragraph.
+- Android keyboard avoidance now covers Meeting creation, handoff, scene,
+  review, and the other simulated-phone app editors while leaving the existing
+  WeChat input behavior unchanged.
 
 ### Native Media Runtime
 
@@ -186,6 +210,10 @@ baked interaction layers.
   realtime audio or WebRTC.
 
 ### Reliability And Data Safety
+
+- Adding a user-created character as a WeChat friend now creates its durable
+  proactive schedule immediately, so enabled background relationship
+  notifications and foreground heartbeat delivery include custom characters.
 
 - Chat AI work is isolated by immutable chat ID and request token. Stale replies
   cannot write into a different chat, and retry reuses the original message.
@@ -429,6 +457,23 @@ baked interaction layers.
   successfully on 2026-07-26 with SDK 36, NDK 27.1.12297006, and Gradle 9.
   The local APK is generated under
   `android/app/build/outputs/apk/debug/app-debug.apk`.
+- The 2026-08-11 OTA-safe Meeting repair completed TypeScript, ESLint, all 35
+  repository contracts, localization, and the full four-viewport UI smoke
+  baseline. A focused 320x568 English Meeting path additionally covers empty,
+  create, opening, turn, edit, retry, long-scene, memory review, completed, and
+  read-only states at
+  `screenshots/smoke-meeting-i18n-2026-08-11/report.json`.
+- The 2026-08-11 Android shell-stability pass gives the safe-area provider
+  first-frame native metrics, reserves a fixed maximum dynamic-island lane,
+  keeps Meeting controls below the physical cutout, and removes animated
+  top-padding reflow from the shared app shell. Native compact breakpoints now
+  use the physical screen height instead of the keyboard-resized window, while
+  shared press feedback runs on the UI thread without React press-state
+  rerenders. TypeScript, ESLint, motion, foreground-performance, and settings
+  stability contracts pass. The complete 320x568 path covers Settings,
+  Characters, Meeting and chat handoff, WeChat, Moments, stickers, payments,
+  voice gestures, and voice/video calls at
+  `screenshots/smoke-android-shell-stability-2026-08-11/report.json`.
 
 ## Repository Cleanup
 
@@ -486,6 +531,6 @@ have a clear relationship job and write to the same trace system.
    provide test data.
 6. Establish Apple signing/device access and run the same physical-device
    matrix on iOS.
-7. Build offline meeting later as a standalone simulated-phone app with its own
-   sessions and checkpoints, writing only completed relationship outcomes into
-   `RelationshipTrace`.
+7. Validate Meeting handoff and multi-turn generation with a real model during
+   the next long physical-device session, including background/resume,
+   completion review, relaunch persistence, and duplicate-safe trace writes.

@@ -17,6 +17,12 @@ import {
   JetBrainsMono_500Medium,
   JetBrainsMono_600SemiBold,
 } from '@expo-google-fonts/jetbrains-mono';
+import {
+  NotoSerifSC_400Regular,
+  NotoSerifSC_500Medium,
+  NotoSerifSC_600SemiBold,
+  NotoSerifSC_700Bold,
+} from '@expo-google-fonts/noto-serif-sc';
 import { useNanaStore } from '../stores/nanaStore';
 
 export function useThemeFont() {
@@ -32,6 +38,10 @@ export function useThemeFont() {
     JetBrainsMono_400Regular,
     JetBrainsMono_500Medium,
     JetBrainsMono_600SemiBold,
+    NotoSerifSC_400Regular,
+    NotoSerifSC_500Medium,
+    NotoSerifSC_600SemiBold,
+    NotoSerifSC_700Bold,
   });
 
   const fontFamily = useNanaStore(s => s.themeConfig.fontFamily);

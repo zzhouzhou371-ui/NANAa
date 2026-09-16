@@ -712,9 +712,9 @@ export function CallOverlay() {
       accessibilityLabel={`${callOverlay.name} ${isVideo ? t.videoCall : t.voiceCall}`}
       accessibilityViewIsModal
       importantForAccessibility="yes"
-      from={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      from={{ translateY: reducedMotion ? 0 : 8 }}
+      animate={{ translateY: 0 }}
+      exit={{ translateY: reducedMotion ? 0 : 6 }}
       transition={{ type: 'timing', duration: reducedMotion ? 0 : 180 }}
       style={{ ...StyleSheet.absoluteFillObject, zIndex: 80, backgroundColor: '#0A0E1C' }}
     >
@@ -726,7 +726,8 @@ export function CallOverlay() {
           source={portraitSource}
           contentFit="cover"
           contentPosition="center"
-          transition={120}
+          cachePolicy="memory-disk"
+          transition={0}
           blurRadius={Platform.OS === 'android' || isVideo ? 0 : isTiny ? 10 : 14}
           style={[StyleSheet.absoluteFillObject, !isVideo ? { transform: [{ scale: 1.12 }] } : null]}
         />

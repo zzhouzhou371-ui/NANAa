@@ -34,6 +34,30 @@ const sandbox = vm.createContext({
 });
 vm.runInContext(compiled.outputText, sandbox, { filename: sourcePath });
 
+const friendshipSourcePath = resolve(root, 'src/services/friendshipRuntime.ts');
+const friendshipSource = readFileSync(friendshipSourcePath, 'utf8');
+const friendshipCompiled = ts.transpileModule(friendshipSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2020,
+    esModuleInterop: true,
+  },
+  fileName: friendshipSourcePath,
+});
+const friendshipModule = { exports: {} };
+const friendshipSandbox = vm.createContext({
+  exports: friendshipModule.exports,
+  module: friendshipModule,
+  require: id => {
+    if (id === './proactiveChatRuntime') return module.exports;
+    throw new Error(`Unexpected friendship runtime dependency: ${id}`);
+  },
+  Date,
+  Math,
+  Object,
+});
+vm.runInContext(friendshipCompiled.outputText, friendshipSandbox, { filename: friendshipSourcePath });
+
 const {
   PROACTIVE_GLOBAL_COOLDOWN_MS,
   PROACTIVE_INTERACTION_DELAY_MIN_MS,
@@ -48,6 +72,7 @@ const {
   selectDueProactiveCandidate,
   selectProactiveFocusEvent,
 } = module.exports;
+const { createAddFriendPatch } = friendshipModule.exports;
 
 const errors = [];
 const expect = (condition, message) => { if (!condition) errors.push(message); };
@@ -95,6 +120,28 @@ const normalized = normalizeProactiveChatSchedules({
   broken: { characterId: 'broken', lastInteractionAt: -1, nextDueAt: 'soon' },
 });
 expect(Object.keys(normalized).join('|') === 'luna-id', 'migration must discard malformed or mismatched schedules');
+
+const addedFriend = createAddFriendPatch(
+  { friends: [], proactiveChatSchedules: {} },
+  { id: 'custom-id', proactiveMessagingFrequency: 'frequent' },
+  now,
+);
+expect(
+  addedFriend.friends.join('|') === 'custom-id'
+    && addedFriend.proactiveChatSchedules['custom-id']?.characterId === 'custom-id',
+  'every add-friend surface must create the same durable proactive schedule',
+);
+const existingSchedule = { characterId: 'custom-id', lastInteractionAt: 1, nextDueAt: 2 };
+const repeatedFriend = createAddFriendPatch(
+  { friends: ['custom-id'], proactiveChatSchedules: { 'custom-id': existingSchedule } },
+  { id: 'custom-id', proactiveMessagingFrequency: 'normal' },
+  now + 10_000,
+);
+expect(
+  repeatedFriend.friends.length === 1
+    && repeatedFriend.proactiveChatSchedules['custom-id'] === existingSchedule,
+  'adding the same friend twice must be idempotent and preserve its relationship clock',
+);
 
 const characters = [
   { id: 'later-id', name: 'Later', avatar: 'L', desc: '' },
@@ -254,6 +301,14 @@ expect(
   'returning to the foreground must check due proactive events',
 );
 expect(layoutSource.includes('setInterval(() =>'), 'a long foreground session must continue checking due events');
+
+const addFriendSource = readFileSync(resolve(root, 'src/components/AddFriendOverlay.tsx'), 'utf8');
+const characterViewSource = readFileSync(resolve(root, 'src/components/CharacterView.tsx'), 'utf8');
+expect(
+  addFriendSource.includes('createAddFriendPatch(')
+    && characterViewSource.includes('createAddFriendPatch('),
+  'adding a user-created character as a friend must immediately create its durable proactive schedule',
+);
 
 const storageSource = readFileSync(resolve(root, 'src/services/storage.ts'), 'utf8');
 expect(storageSource.includes("'proactiveChatSchedules'"), 'portable storage must allow validated proactive schedules');

@@ -269,20 +269,10 @@ export function MomentsView({
         <ExpoImage
           source={bundledCover ? wechatAssets.momentsCover : { uri: normalizedCover }}
           contentFit="cover"
-          transition={160}
+          cachePolicy="memory-disk"
+          transition={0}
           style={{ width: '100%', height: 142 }}
           accessible={false}
-        />
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            right: 0,
-            bottom: 0,
-            left: 0,
-            height: 62,
-            backgroundColor: 'rgba(42,31,54,0.16)',
-          }}
         />
       </AnimatedPressable>
 
@@ -520,7 +510,7 @@ function MomentImage({
     <ExpoImage
       source={{ uri }}
       contentFit="cover"
-      transition={120}
+      transition={0}
       cachePolicy="memory-disk"
       recyclingKey={uri}
       onError={() => setFailed(true)}

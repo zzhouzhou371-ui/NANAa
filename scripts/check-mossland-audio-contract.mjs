@@ -46,6 +46,10 @@ class MockFile {
     this.exists = true;
     this.size = 1024;
   }
+
+  async base64() {
+    return 'bTRh';
+  }
 }
 
 const calls = [];
@@ -64,6 +68,12 @@ const response = ({
   arrayBuffer: async () => Uint8Array.from(bytes).buffer,
 });
 const writableFiles = [];
+const speakableTextRuntime = loadTypeScriptModule(
+  resolve(root, 'src/services/speakableText.ts'),
+);
+const voiceTranscriptionGuardRuntime = loadTypeScriptModule(
+  resolve(root, 'src/services/voiceTranscriptionGuard.ts'),
+);
 const runtime = loadTypeScriptModule(
   resolve(root, 'src/services/audioAiRuntime.ts'),
   {
@@ -103,6 +113,8 @@ const runtime = loadTypeScriptModule(
         return file;
       },
     },
+    './speakableText': speakableTextRuntime,
+    './voiceTranscriptionGuard': voiceTranscriptionGuardRuntime,
   },
 );
 
@@ -117,7 +129,9 @@ const sttResult = await runtime.transcribeAudioCapture({
     phase: 'ready',
     mediaKind: 'audio',
     localUri: 'file:///cache/voice.m4a',
+    durationMillis: 2400,
     durationSec: 2.4,
+    meteringSamplesDb: [-72, -36, -31, -54],
   },
   apiUrl: 'https://api.mosi.cn/',
   apiKey: 'secret-key',
@@ -138,9 +152,78 @@ expect(calls[0]?.init?.headers?.Authorization === 'Bearer secret-key', 'Mossland
 expect(!calls[0]?.init?.headers?.['Content-Type'], 'Mossland STT must let expo/fetch generate the multipart boundary');
 
 calls.length = 0;
+const providerTextOnSilence = await runtime.transcribeAudioCapture({
+  capture: {
+    phase: 'ready',
+    mediaKind: 'audio',
+    transcript: 'hallucinated provider text',
+    localUri: 'file:///documents/silence.m4a',
+    durationMillis: 2400,
+    meteringSamplesDb: [-88, -82, -79, -84],
+  },
+  apiUrl: 'https://api.mosi.cn',
+  apiKey: 'secret-key',
+  selectedModel: 'moss-transcribe',
+  language: 'zh-CN',
+});
+expect(
+  providerTextOnSilence.phase === 'failed'
+    && providerTextOnSilence.errorCode === 'noSpeechDetected'
+    && providerTextOnSilence.errorStage === 'input',
+  'local silence evidence must override any stale or provider-supplied transcript',
+);
+expect(calls.length === 0, 'metered silence must never make a remote STT request');
+
+calls.length = 0;
+const unsupportedAndroidRecording = await runtime.transcribeAudioCapture({
+  capture: {
+    phase: 'processing',
+    mediaKind: 'audio',
+    localUri: 'file:///documents/legacy-android-recording.3gp',
+    durationSec: 2,
+  },
+  apiUrl: 'https://api.mosi.cn',
+  apiKey: 'secret-key',
+  selectedModel: 'moss-transcribe',
+  language: 'zh-CN',
+});
+expect(
+  unsupportedAndroidRecording.phase === 'failed'
+    && unsupportedAndroidRecording.errorStage === 'input'
+    && unsupportedAndroidRecording.errorMessage.includes('3GP'),
+  'legacy Android 3GP recordings must fail locally with an actionable format diagnostic',
+);
+expect(calls.length === 0, 'unsupported Android 3GP must fail before a provider request');
+
+calls.length = 0;
+nextResponse = response({
+  json: {
+    candidates: [{ content: { parts: [{ text: 'M4A transcript' }] } }],
+  },
+});
+const geminiM4a = await runtime.transcribeAudioCapture({
+  capture: {
+    phase: 'processing',
+    mediaKind: 'audio',
+    localUri: 'file:///documents/android-recording.m4a',
+    durationSec: 2,
+  },
+  apiUrl: 'https://generativelanguage.googleapis.com',
+  apiKey: 'secret-key',
+  selectedModel: 'gemini-2.5-flash',
+  language: 'zh-CN',
+});
+const geminiBody = JSON.parse(calls[0]?.init?.body || '{}');
+expect(geminiM4a.phase === 'ready', 'Gemini must accept the Android M4A transcription path');
+expect(
+  geminiBody.contents?.[0]?.parts?.[1]?.inlineData?.mimeType === 'audio/mp4',
+  'M4A recordings must use their MP4 container MIME type for Gemini',
+);
+
+calls.length = 0;
 nextResponse = response();
 const ttsResult = await runtime.synthesizeSpeechAudio({
-  text: '晚安，做个好梦。',
+  text: '[Sticker: wave] Good night 😊',
   apiUrl: 'https://api.mosi.cn',
   apiKey: 'secret-key',
   voiceProfileId: 'voice_luna_01',
@@ -152,6 +235,7 @@ expect(calls[0]?.url === 'https://api.mosi.cn/v1/audio/speech', 'Mossland TTS mu
 const ttsBody = JSON.parse(calls[0]?.init?.body || '{}');
 expect(Object.keys(ttsBody).join(',') === 'model,input,voice_id,response_format,delivery_method', 'Mossland TTS must send only documented JSON fields');
 expect(ttsBody.model === 'moss-tts', 'Mossland TTS must force moss-tts');
+expect(ttsBody.input === 'Good night', 'remote TTS must remove sticker markers and emoji from spoken input');
 expect(ttsBody.voice_id === 'voice_luna_01', 'Mossland TTS must preserve the character voice_id');
 expect(ttsBody.delivery_method === 'audio', 'Mossland TTS must request binary audio delivery');
 expect(writableFiles.length === 1, 'Mossland TTS must write the returned audio exactly once');

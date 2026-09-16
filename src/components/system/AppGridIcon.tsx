@@ -37,7 +37,7 @@ export function AppGridIcon({ label, icon, colors, onPress, disabled = false, as
             contentPosition="center"
             cachePolicy="memory-disk"
             priority="high"
-            transition={140}
+            transition={0}
             style={{ width: compact ? 88 : 112, height: compact ? 76 : 96 }}
           />
         ) : (

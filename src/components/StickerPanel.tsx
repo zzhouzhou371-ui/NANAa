@@ -140,7 +140,7 @@ export function StickerPanel({
                     autoplay={sticker.animated}
                     cachePolicy="memory-disk"
                     contentFit="contain"
-                    transition={120}
+                    transition={0}
                     style={{ width: '100%', height: '100%' }}
                   />
                 </NeumorphicSurface>
@@ -152,4 +152,3 @@ export function StickerPanel({
     </View>
   );
 }
-

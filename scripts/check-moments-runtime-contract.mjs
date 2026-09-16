@@ -274,6 +274,10 @@ expect(momentsViewSource.includes("from 'expo-image'"), 'Moments images must use
 expect(momentsViewSource.includes('NeumorphicSurface'), 'Moments cards must use the current neumorphic material');
 expect(momentsViewSource.includes('replyToCommentId'), 'Moments must expose reply-aware comment UI');
 expect(!momentsViewSource.includes('/^https?'), 'Moments must not reject local, content, or data image URIs');
+expect(
+  !momentsViewSource.includes("backgroundColor: 'rgba(42,31,54,0.16)'"),
+  'Moments cover must not darken its lower half when no text overlays the image',
+);
 
 const composerSource = readFileSync(resolve(root, 'src/components/ComposeMomentOverlay.tsx'), 'utf8');
 expect(composerSource.includes('onPublish'), 'composer must accept an integration-owned publish action');

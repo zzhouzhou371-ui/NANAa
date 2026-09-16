@@ -52,7 +52,8 @@ export function CharacterPortrait({
         accessibilityIgnoresInvertColors
         source={source}
         contentFit={contentFit}
-        transition={120}
+        cachePolicy="memory-disk"
+        transition={0}
         style={{ width: '100%', height: '100%' }}
       />
     );

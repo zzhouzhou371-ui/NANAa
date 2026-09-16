@@ -1,19 +1,27 @@
-import { Platform, Text, View, useWindowDimensions } from 'react-native';
+import type { ReactNode } from 'react';
+import {
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { FileText, Send, Trash2 } from 'lucide-react-native';
 import { MotiView } from 'moti';
-import Svg, {
-  Defs,
-  LinearGradient as SvgLinearGradient,
-  Path,
-  Stop,
-} from 'react-native-svg';
+import { Easing } from 'react-native-reanimated';
 import { create } from 'zustand';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
-import { CHAT_BUBBLE_OUTGOING_INK } from './chat-bubble-surface';
-import { neumorphicPalette } from './neumorphic-surface';
+import {
+  NeumorphicSurface,
+  neumorphicPalette,
+  type NeumorphicDepth,
+  type NeumorphicTone,
+} from './neumorphic-surface';
 import { useReduceMotionEnabled } from './system/DynamicIsland';
-import { wechatTheme } from './wechatTheme';
 
 export type VoiceGestureVisualPhase =
   | 'idle'
@@ -36,7 +44,10 @@ interface VoiceGestureVisualSnapshot {
 
 interface VoiceGestureVisualState extends VoiceGestureVisualSnapshot {
   meteringHistory: number[];
+  gesturePosition: number;
 }
+
+type VoiceAction = 'cancel' | 'send' | 'convert';
 
 const initialVisualState: VoiceGestureVisualState = {
   visible: false,
@@ -44,20 +55,40 @@ const initialVisualState: VoiceGestureVisualState = {
   durationSec: 0,
   meteringLevel: 1,
   meteringHistory: [],
+  gesturePosition: 1,
 };
 
 const useVoiceGestureVisualStore = create<VoiceGestureVisualState>(() => initialVisualState);
+const nativeUiFont = Platform.select({ ios: 'System', android: 'sans-serif', default: 'system-ui' });
+const MOTION_EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
+const WAVE_SAMPLE_COUNT = 18;
+const VOICE_TRACK_FOLLOW_MS = 40;
 
 export function updateVoiceGestureVisual(next: VoiceGestureVisualSnapshot) {
   useVoiceGestureVisualStore.setState(current => {
-    const sample = Math.max(0.12, Math.min(1, next.meteringLevel));
+    const rawSample = Math.max(0.12, Math.min(1, next.meteringLevel));
+    const previousSample = current.meteringHistory.at(-1) ?? rawSample;
+    // Recorder metering can move tens of decibels between callbacks. A short
+    // low-pass filter keeps the waveform responsive without making every bar
+    // snap to the newest sample.
+    const smoothedSample = previousSample * 0.52 + rawSample * 0.48;
     const previousHistory = current.visible ? current.meteringHistory : [];
-    const meteringHistory = [...previousHistory, sample].slice(-18);
+    const meteringHistory = [...previousHistory, smoothedSample].slice(-WAVE_SAMPLE_COUNT);
     return {
       ...next,
       meteringHistory,
+      gesturePosition: current.gesturePosition,
     };
   });
+}
+
+export function updateVoiceGesturePosition(position: number) {
+  const gesturePosition = Math.max(0, Math.min(2, position));
+  useVoiceGestureVisualStore.setState(current => (
+    Math.abs(current.gesturePosition - gesturePosition) < 0.001
+      ? current
+      : { ...current, gesturePosition }
+  ));
 }
 
 export function hideVoiceGestureVisual() {
@@ -66,29 +97,190 @@ export function hideVoiceGestureVisual() {
   ));
 }
 
-const nativeUiFont = Platform.select({ ios: 'System', android: 'sans-serif', default: 'system-ui' });
+function formatElapsed(durationSec: number) {
+  const safeDuration = Math.max(0, Math.floor(durationSec));
+  const minutes = Math.floor(safeDuration / 60);
+  const seconds = safeDuration % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
 
-function createVoiceBubblePath(width: number, height: number, tailCenter: number) {
-  const bodyBottom = height - 7;
-  const radius = Math.min(22, bodyBottom * 0.3, width * 0.24);
-  const tailHalfWidth = Math.min(6, width * 0.1);
-  const tailShoulder = Math.max(radius + 2, Math.min(width - radius - 2, tailCenter));
+function resolveWaveScale(sample: number, phase: VoiceGestureVisualPhase, index: number) {
+  if (phase === 'cancelArmed') {
+    return 0.12 + sample * 0.2;
+  }
+  if (phase === 'transcribeArmed' || phase === 'converting') {
+    const centerEmphasis = 1 - Math.min(1, Math.abs(index - (WAVE_SAMPLE_COUNT - 1) / 2) / 9);
+    return Math.min(0.78, 0.2 + sample * 0.38 + centerEmphasis * 0.1);
+  }
+  return Math.max(0.15, sample);
+}
 
-  return [
-    `M ${radius} 0`,
-    `H ${width - radius}`,
-    `C ${width - radius * 0.42} 0, ${width} ${radius * 0.42}, ${width} ${radius}`,
-    `V ${bodyBottom - radius}`,
-    `C ${width} ${bodyBottom - radius * 0.42}, ${width - radius * 0.42} ${bodyBottom}, ${width - radius} ${bodyBottom}`,
-    `H ${tailShoulder + tailHalfWidth}`,
-    `C ${tailShoulder + tailHalfWidth * 0.56} ${bodyBottom}, ${tailShoulder + tailHalfWidth * 0.32} ${height - 1.8}, ${tailShoulder} ${height}`,
-    `C ${tailShoulder - tailHalfWidth * 0.32} ${height - 1.8}, ${tailShoulder - tailHalfWidth * 0.56} ${bodyBottom}, ${tailShoulder - tailHalfWidth} ${bodyBottom}`,
-    `H ${radius}`,
-    `C ${radius * 0.42} ${bodyBottom}, 0 ${bodyBottom - radius * 0.42}, 0 ${bodyBottom - radius}`,
-    `V ${radius}`,
-    `C 0 ${radius * 0.42}, ${radius * 0.42} 0, ${radius} 0`,
-    'Z',
-  ].join(' ');
+function VoiceMaterialSurface({
+  children,
+  neumorphic,
+  depth = 'raised',
+  tone = 'lavender',
+  radius,
+  style,
+  contentStyle,
+  testID,
+}: {
+  children?: ReactNode;
+  neumorphic: boolean;
+  depth?: NeumorphicDepth;
+  tone?: NeumorphicTone;
+  radius: number;
+  style?: StyleProp<ViewStyle>;
+  contentStyle?: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  if (neumorphic) {
+    return (
+      <NeumorphicSurface
+        testID={testID}
+        pointerEvents="none"
+        depth={depth}
+        tone={tone}
+        radius={radius}
+        style={style}
+        contentStyle={contentStyle}
+      >
+        {children}
+      </NeumorphicSurface>
+    );
+  }
+
+  return (
+    <View
+      testID={testID}
+      pointerEvents="none"
+      style={[
+        {
+          position: 'relative',
+          borderRadius: radius,
+          borderCurve: 'continuous',
+          overflow: 'hidden',
+          backgroundColor: 'rgba(48, 28, 43, 0.94)',
+          boxShadow: depth === 'inset'
+            ? 'inset 3px 3px 7px rgba(5,2,8,0.50), inset -2px -2px 5px rgba(255,238,247,0.10)'
+            : '0 6px 12px rgba(5,2,8,0.32)',
+        },
+        style,
+      ]}
+    >
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(255,255,255,0.09)', 'rgba(255,255,255,0.015)', 'rgba(5,2,8,0.18)']}
+        locations={[0, 0.48, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[StyleSheet.absoluteFillObject, { borderRadius: radius }]}
+      />
+      <View style={contentStyle}>{children}</View>
+    </View>
+  );
+}
+
+function VoiceWaveform({
+  samples,
+  phase,
+  reducedMotion,
+  color,
+}: {
+  samples: number[];
+  phase: VoiceGestureVisualPhase;
+  reducedMotion: boolean;
+  color: string;
+}) {
+  const paddedSamples = [
+    ...Array(Math.max(0, WAVE_SAMPLE_COUNT - samples.length)).fill(0.12),
+    ...samples,
+  ].slice(-WAVE_SAMPLE_COUNT);
+
+  return (
+    <View
+      testID="voice-gesture-live-waveform"
+      style={{
+        height: 28,
+        flex: 1,
+        minWidth: 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 2,
+      }}
+    >
+      {paddedSamples.map((sample, index) => {
+        const scaleY = resolveWaveScale(sample, phase, index);
+        const recency = 0.48 + ((index + 1) / WAVE_SAMPLE_COUNT) * 0.52;
+        return (
+          <MotiView
+            key={index}
+            animate={{
+              scaleY,
+            }}
+            transition={{
+              type: 'timing',
+              duration: reducedMotion ? 0 : phase === 'recording' ? 165 : 190,
+              easing: MOTION_EASE_OUT,
+            }}
+            style={{
+              width: 2.5,
+              height: 25,
+              borderRadius: 2,
+              backgroundColor: color,
+              opacity: recency,
+            }}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function ActionGlyph({
+  action,
+  active,
+  meteringLevel,
+  reducedMotion,
+  color,
+}: {
+  action: VoiceAction;
+  active: boolean;
+  meteringLevel: number;
+  reducedMotion: boolean;
+  color: string;
+}) {
+  if (action === 'cancel') {
+    return <Trash2 size={16} color={color} strokeWidth={active ? 2.2 : 1.8} />;
+  }
+  if (action === 'convert') {
+    return <FileText size={16} color={color} strokeWidth={active ? 2.2 : 1.8} />;
+  }
+
+  return active ? (
+    <View style={{ width: 18, height: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+      {[0.52, 1, 0.72].map((weight, index) => (
+        <MotiView
+          key={index}
+          animate={{ scaleY: Math.max(0.32, meteringLevel * weight) }}
+          transition={{
+            type: 'timing',
+            duration: reducedMotion ? 0 : 165,
+            easing: MOTION_EASE_OUT,
+          }}
+          style={{
+            width: 2.5,
+            height: 12,
+            borderRadius: 2,
+            backgroundColor: color,
+          }}
+        />
+      ))}
+    </View>
+  ) : (
+    <Send size={16} color={color} strokeWidth={1.8} />
+  );
 }
 
 export function VoiceGestureOverlay() {
@@ -109,119 +301,44 @@ export function VoiceGestureOverlay() {
   const cancelArmed = visual.phase === 'cancelArmed';
   const transcribeArmed = visual.phase === 'transcribeArmed' || visual.phase === 'converting';
   const terminalFeedback = visual.phase === 'tooShort' || visual.phase === 'converting';
-  const activeAction = cancelArmed ? 'cancel' : transcribeArmed ? 'convert' : 'send';
-  const centerY = height * 0.58;
-  const defaultBubbleWidth = Math.min(176, width - 32);
-  const cancelBubbleWidth = Math.min(78, width - 32);
-  const transcribeBubbleWidth = Math.min(358, width - 24);
-  const defaultBubbleHeight = 72;
-  const transcribeBubbleHeight = 84;
-  const bubbleWidth = cancelArmed
-    ? cancelBubbleWidth
-    : transcribeArmed
-      ? transcribeBubbleWidth
-      : defaultBubbleWidth;
-  const bubbleHeight = transcribeArmed ? transcribeBubbleHeight : defaultBubbleHeight;
-  const bubbleLeft = cancelArmed
-    ? Math.max(18, width * 0.09)
-    : transcribeArmed
-      ? (width - bubbleWidth) / 2
-      : (width - bubbleWidth) / 2;
-  const bubbleTop = centerY - bubbleHeight / 2;
-  const bubbleTailCenter = transcribeArmed ? bubbleWidth * 0.82 : bubbleWidth * 0.5;
-  const bubblePath = createVoiceBubblePath(bubbleWidth, bubbleHeight, bubbleTailCenter);
-  const surfaceTop = height * 0.79;
-  const surfaceHeight = Math.max(116, height - surfaceTop);
-  const zoneWidth = width * 0.49;
-  const zoneLabelTop = surfaceTop + surfaceHeight * 0.22;
-  const sendLabelTop = surfaceTop + surfaceHeight * 0.7;
-  // Match WeChat's actual gesture skeleton: two floating fan-shaped slide
-  // targets with rounded inner noses above one broad, shallow send arc.
-  // Ratios are measured from the 1440 x 3200 reference screenshot.
-  const leftActionPath = [
-    `M ${-width * 0.07} ${surfaceHeight * 0.23}`,
-    `C ${width * 0.06} ${surfaceHeight * 0.16}, ${width * 0.24} ${surfaceHeight * 0.06}, ${width * 0.35} ${surfaceHeight * 0.043}`,
-    `C ${width * 0.38} ${surfaceHeight * 0.038}, ${width * 0.405} ${surfaceHeight * 0.035}, ${width * 0.42} ${surfaceHeight * 0.052}`,
-    `C ${width * 0.44} ${surfaceHeight * 0.074}, ${width * 0.457} ${surfaceHeight * 0.112}, ${width * 0.468} ${surfaceHeight * 0.153}`,
-    `C ${width * 0.475} ${surfaceHeight * 0.18}, ${width * 0.475} ${surfaceHeight * 0.23}, ${width * 0.471} ${surfaceHeight * 0.269}`,
-    `C ${width * 0.464} ${surfaceHeight * 0.322}, ${width * 0.44} ${surfaceHeight * 0.377}, ${width * 0.398} ${surfaceHeight * 0.401}`,
-    `C ${width * 0.37} ${surfaceHeight * 0.407}, ${width * 0.335} ${surfaceHeight * 0.414}, ${width * 0.3} ${surfaceHeight * 0.422}`,
-    `C ${width * 0.2} ${surfaceHeight * 0.447}, ${width * 0.09} ${surfaceHeight * 0.515}, ${-width * 0.07} ${surfaceHeight * 0.61}`,
-    'Z',
-  ].join(' ');
-  const rightActionPath = [
-    `M ${width * 1.07} ${surfaceHeight * 0.23}`,
-    `C ${width * 0.94} ${surfaceHeight * 0.16}, ${width * 0.76} ${surfaceHeight * 0.06}, ${width * 0.65} ${surfaceHeight * 0.043}`,
-    `C ${width * 0.62} ${surfaceHeight * 0.038}, ${width * 0.595} ${surfaceHeight * 0.035}, ${width * 0.58} ${surfaceHeight * 0.052}`,
-    `C ${width * 0.56} ${surfaceHeight * 0.074}, ${width * 0.543} ${surfaceHeight * 0.112}, ${width * 0.532} ${surfaceHeight * 0.153}`,
-    `C ${width * 0.525} ${surfaceHeight * 0.18}, ${width * 0.525} ${surfaceHeight * 0.23}, ${width * 0.529} ${surfaceHeight * 0.269}`,
-    `C ${width * 0.536} ${surfaceHeight * 0.322}, ${width * 0.56} ${surfaceHeight * 0.377}, ${width * 0.602} ${surfaceHeight * 0.401}`,
-    `C ${width * 0.63} ${surfaceHeight * 0.407}, ${width * 0.665} ${surfaceHeight * 0.414}, ${width * 0.7} ${surfaceHeight * 0.422}`,
-    `C ${width * 0.8} ${surfaceHeight * 0.447}, ${width * 0.91} ${surfaceHeight * 0.515}, ${width * 1.07} ${surfaceHeight * 0.61}`,
-    'Z',
-  ].join(' ');
-  const sendActionPath = [
-    `M ${-width * 0.07} ${surfaceHeight * 0.72}`,
-    `C ${-width * 0.025} ${surfaceHeight * 0.688}, ${width * 0.055} ${surfaceHeight * 0.625}, ${width * 0.1} ${surfaceHeight * 0.601}`,
-    `C ${width * 0.19} ${surfaceHeight * 0.551}, ${width * 0.29} ${surfaceHeight * 0.516}, ${width * 0.4} ${surfaceHeight * 0.496}`,
-    `C ${width * 0.435} ${surfaceHeight * 0.49}, ${width * 0.47} ${surfaceHeight * 0.485}, ${width * 0.5} ${surfaceHeight * 0.485}`,
-    `C ${width * 0.53} ${surfaceHeight * 0.485}, ${width * 0.565} ${surfaceHeight * 0.49}, ${width * 0.6} ${surfaceHeight * 0.496}`,
-    `C ${width * 0.71} ${surfaceHeight * 0.516}, ${width * 0.81} ${surfaceHeight * 0.551}, ${width * 0.9} ${surfaceHeight * 0.601}`,
-    `C ${width * 0.945} ${surfaceHeight * 0.625}, ${width * 1.025} ${surfaceHeight * 0.688}, ${width * 1.07} ${surfaceHeight * 0.72}`,
-    `L ${width * 1.07} ${surfaceHeight * 1.06}`,
-    `L ${-width * 0.07} ${surfaceHeight * 1.06}`,
-    'Z',
-  ].join(' ');
+  const activeAction: VoiceAction = cancelArmed ? 'cancel' : transcribeArmed ? 'convert' : 'send';
+  const controlWidth = Math.min(width - 28, 402);
+  const trackInset = 8;
+  const trackWidth = controlWidth - trackInset * 2;
+  const segmentWidth = trackWidth / 3;
+  const controlHeight = 88;
+  const controlBottom = Math.max(14, Math.min(24, height * 0.024));
+  const liveWidth = Math.min(width - 44, 246);
+  const liveTop = Math.max(164, height * 0.57 - 42);
   const remainingSeconds = visual.durationSec >= 50 ? Math.max(0, 60 - visual.durationSec) : null;
-  const meteringHistory = [
-    ...Array(Math.max(0, 18 - visual.meteringHistory.length)).fill(0.12),
-    ...visual.meteringHistory,
+  const timerLabel = remainingSeconds === null
+    ? formatElapsed(visual.durationSec)
+    : `-${remainingSeconds}s`;
+  const statusLabel = visual.phase === 'converting'
+    ? t.processing
+    : visual.phase === 'tooShort'
+      ? t.recordingTooShort
+      : cancelArmed
+        ? t.releaseToCancel
+        : transcribeArmed
+          ? t.releaseToConvert
+          : t.releaseToSend;
+  const liveTone: NeumorphicTone = 'lavender';
+  const liveInk = cancelArmed
+    ? '#4A2635'
+    : transcribeArmed
+      ? '#303A57'
+      : neumorphicPalette.onLightPrimary;
+  const waveInk = cancelArmed
+    ? '#7C3D55'
+    : transcribeArmed
+      ? '#4E5D87'
+      : '#5B4662';
+  const actionItems: { action: VoiceAction; label: string }[] = [
+    { action: 'cancel', label: t.cancel },
+    { action: 'send', label: t.send },
+    { action: 'convert', label: t.convertToText },
   ];
-  const displayedMeteringHistory = cancelArmed
-    ? meteringHistory.slice(-10)
-    : transcribeArmed
-      ? meteringHistory.slice(-12)
-      : meteringHistory.slice(-16);
-  const waveformWidth = cancelArmed
-    ? Math.min(30, bubbleWidth * 0.38)
-    : transcribeArmed
-      ? Math.min(44, bubbleWidth * 0.13)
-      : Math.min(70, bubbleWidth * 0.4);
-  const bubbleFill = neumorphic
-    ? cancelArmed
-      ? { top: '#E4C0CC', middle: neumorphicPalette.pinkGold, bottom: '#B87790', topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
-      : transcribeArmed
-        ? { top: '#DCE0EE', middle: '#BCC4DD', bottom: '#9CA8C8', topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
-        : { top: '#E6DFEF', middle: neumorphicPalette.mist, bottom: neumorphicPalette.soft, topOpacity: 1, middleOpacity: 1, bottomOpacity: 1 }
-    : cancelArmed
-      ? { top: '#E77895', middle: '#B54164', bottom: '#5B2037', topOpacity: 0.55, middleOpacity: 0.68, bottomOpacity: 0.8 }
-      : transcribeArmed
-        ? { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.56, bottomOpacity: 0.73 }
-        : { top: '#D59BB2', middle: '#9D5776', bottom: '#3B1E30', topOpacity: 0.42, middleOpacity: 0.57, bottomOpacity: 0.74 };
-  const bubbleInk = neumorphic
-    ? transcribeArmed
-      ? '#303952'
-      : cancelArmed
-        ? '#452735'
-        : neumorphicPalette.onLightPrimary
-    : wechatTheme.ink;
-  const waveformInk = neumorphic
-    ? transcribeArmed
-      ? '#3D496A'
-      : cancelArmed
-        ? '#5B3042'
-        : '#49394F'
-    : 'rgba(48, 20, 38, 0.96)';
-  const bubbleRim = neumorphic
-    ? transcribeArmed
-      ? 'rgba(250,252,255,0.72)'
-      : 'rgba(255,249,252,0.68)'
-    : 'rgba(255,245,248,0.10)';
-  const bubbleDepth = neumorphic
-    ? transcribeArmed
-      ? 'rgba(45,53,78,0.38)'
-      : 'rgba(57,39,62,0.38)'
-    : 'rgba(5,2,7,0.16)';
 
   return (
     <View
@@ -236,401 +353,232 @@ export function VoiceGestureOverlay() {
         right: 0,
         bottom: 0,
         left: 0,
-        // Keep the simulated system clock and signal legible above the scrim;
-        // the chat header and composer remain underneath this root-level layer.
         zIndex: 55,
         overflow: 'hidden',
-        backgroundColor: neumorphic ? 'rgba(18, 11, 23, 0.62)' : 'rgba(2, 1, 6, 0.72)',
+        backgroundColor: neumorphic ? 'rgba(19, 12, 24, 0.57)' : 'rgba(2, 1, 6, 0.68)',
       }}
     >
       <LinearGradient
         colors={neumorphic
-          ? ['rgba(59, 42, 66, 0)', 'rgba(35, 24, 43, 0.32)', 'rgba(22, 14, 28, 0.62)']
-          : ['rgba(18, 4, 17, 0)', 'rgba(9, 1, 11, 0.36)', 'rgba(4, 0, 7, 0.66)']}
-        locations={[0, 0.32, 1]}
+          ? ['rgba(49, 35, 57, 0)', 'rgba(31, 21, 38, 0.34)', 'rgba(18, 11, 23, 0.78)']
+          : ['rgba(18, 4, 17, 0)', 'rgba(9, 1, 11, 0.38)', 'rgba(4, 0, 7, 0.84)']}
+        locations={[0, 0.48, 1]}
         start={{ x: 0.5, y: 0 }}
         end={{ x: 0.5, y: 1 }}
-        style={{
-          position: 'absolute',
-          top: height * 0.44,
-          right: 0,
-          bottom: 0,
-          left: 0,
-          zIndex: 0,
-          opacity: 1,
-        }}
-      />
-      <LinearGradient
-        colors={neumorphic
-          ? ['rgba(25, 16, 31, 0)', 'rgba(25, 16, 31, 0.74)', 'rgba(18, 11, 23, 0.90)']
-          : ['rgba(3, 0, 6, 0)', 'rgba(3, 0, 6, 0.84)', 'rgba(2, 0, 5, 0.93)']}
-        locations={[0, 0.38, 1]}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 1 }}
-        style={{
-          position: 'absolute',
-          top: surfaceTop - 54,
-          right: 0,
-          bottom: 0,
-          left: 0,
-          zIndex: 0,
-        }}
+        style={[StyleSheet.absoluteFillObject, { top: height * 0.38 }]}
       />
 
       <MotiView
         testID="voice-gesture-bubble"
-        animate={{
-          opacity: 1,
-          scale: reducedMotion ? 1 : terminalFeedback ? 0.99 : 1,
+        from={{ translateY: reducedMotion ? 0 : 5 }}
+        animate={{ translateY: 0 }}
+        transition={{
+          type: 'timing',
+          duration: reducedMotion ? 0 : 180,
+          easing: MOTION_EASE_OUT,
         }}
-        transition={{ type: 'timing', duration: reducedMotion ? 70 : 140 }}
         style={{
           position: 'absolute',
-          top: bubbleTop,
-          left: bubbleLeft,
-          width: bubbleWidth,
-          height: bubbleHeight,
-          minHeight: 48,
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 3,
+          top: liveTop,
+          left: (width - liveWidth) / 2,
+          width: liveWidth,
+          height: 76,
         }}
       >
-        <Svg
-          width={bubbleWidth}
-          height={bubbleHeight}
-          viewBox={`0 0 ${bubbleWidth} ${bubbleHeight}`}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-          }}
+        <VoiceMaterialSurface
+          neumorphic={neumorphic}
+          depth="raisedSmall"
+          tone={liveTone}
+          radius={20}
+          style={{ width: '100%', height: '100%' }}
+          contentStyle={{ paddingHorizontal: 16, paddingVertical: 11 }}
         >
-          <Defs>
-            <SvgLinearGradient id="voiceBubbleFill" x1={0} y1={0} x2={0} y2={bubbleHeight} gradientUnits="userSpaceOnUse">
-              <Stop offset="0" stopColor={bubbleFill.top} stopOpacity={bubbleFill.topOpacity * 0.72} />
-              <Stop offset="0.34" stopColor={bubbleFill.middle} stopOpacity={bubbleFill.middleOpacity} />
-              <Stop offset="1" stopColor={bubbleFill.bottom} stopOpacity={bubbleFill.bottomOpacity} />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="voiceBubbleSheen" x1={0} y1={0} x2={0} y2={bubbleHeight * 0.42} gradientUnits="userSpaceOnUse">
-              <Stop offset="0" stopColor="#FFF5F8" stopOpacity="0.075" />
-              <Stop offset="0.42" stopColor="#FFF5F8" stopOpacity="0.025" />
-              <Stop offset="1" stopColor="#FFF5F8" stopOpacity="0" />
-            </SvgLinearGradient>
-            <SvgLinearGradient id="voiceBubbleDepth" x1={0} y1={bubbleHeight * 0.35} x2={0} y2={bubbleHeight} gradientUnits="userSpaceOnUse">
-              <Stop offset="0" stopColor="#050207" stopOpacity="0" />
-              <Stop offset="1" stopColor="#050207" stopOpacity="0.14" />
-            </SvgLinearGradient>
-          </Defs>
-          {neumorphic ? (
-            <Path d={bubblePath} fill={bubbleDepth} transform="translate(0 3)" />
-          ) : null}
-          <Path d={bubblePath} fill="url(#voiceBubbleFill)" />
-          <Path d={bubblePath} fill="url(#voiceBubbleSheen)" />
-          <Path d={bubblePath} fill="url(#voiceBubbleDepth)" />
-          <Path d={bubblePath} fill="none" stroke={bubbleRim} strokeWidth={neumorphic ? 1.1 : 0.7} />
-        </Svg>
-
-        {terminalFeedback ? (
-          <Text
-            numberOfLines={1}
-            style={{
-              maxWidth: bubbleWidth - 24,
-              color: bubbleInk,
-              fontSize: 13,
-              lineHeight: 18,
-              fontWeight: '700',
-              fontFamily: nativeUiFont,
-            }}
-          >
-            {visual.phase === 'converting' ? t.processing : t.recordingTooShort}
-          </Text>
-        ) : (
-          <>
-            {transcribeArmed ? (
-              <View style={{ position: 'absolute', top: bubbleHeight * 0.25, bottom: bubbleHeight * 0.25, left: 22, width: 2, borderRadius: 1, backgroundColor: neumorphic ? '#65739A' : wechatTheme.peach }} />
-            ) : null}
-            <View
-              style={{
-                position: transcribeArmed ? 'absolute' : 'relative',
-                right: transcribeArmed ? 28 : undefined,
-                width: waveformWidth,
-                height: bubbleHeight * 0.46,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: width <= 340 ? 1 : 1.4,
-              }}
-            >
-              {displayedMeteringHistory.map((sample, index) => (
-                <MotiView
-                  key={index}
-                  animate={{ scaleY: Math.max(0.14, sample) }}
-                  transition={{ type: 'timing', duration: reducedMotion ? 60 : 120 }}
-                  style={{
-                    flex: 1,
-                    maxWidth: 2.6,
-                    height: bubbleHeight * 0.42,
-                    borderRadius: 2,
-                    backgroundColor: waveformInk,
-                  }}
-                />
-              ))}
-            </View>
-            {remainingSeconds !== null ? (
-              <Text style={{ position: 'absolute', bottom: 5, color: neumorphic ? bubbleInk : 'rgba(255, 241, 238, 0.88)', fontSize: 11, lineHeight: 14, fontWeight: '700', fontFamily: nativeUiFont, fontVariant: ['tabular-nums'] }}>
-                {remainingSeconds}s
-              </Text>
-            ) : null}
-          </>
-        )}
-      </MotiView>
-
-      {!terminalFeedback ? (
-        <>
-          {cancelArmed ? (
-            <Text style={{ position: 'absolute', top: surfaceTop - 31, left: 18, width: zoneWidth, zIndex: 4, color: 'rgba(255, 241, 238, 0.76)', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '600', fontFamily: nativeUiFont }}>
-              {t.releaseToCancel}
-            </Text>
-          ) : null}
-          {transcribeArmed ? (
-            <Text style={{ position: 'absolute', top: surfaceTop - 31, right: 18, width: zoneWidth, zIndex: 4, color: 'rgba(255, 241, 238, 0.76)', fontSize: 13, lineHeight: 18, textAlign: 'center', fontWeight: '600', fontFamily: nativeUiFont }}>
-              {t.releaseToConvert}
-            </Text>
-          ) : null}
-
-          <Svg
-            testID="voice-gesture-surface"
-            width={width}
-            height={surfaceHeight}
-            viewBox={`0 0 ${width} ${surfaceHeight}`}
-            style={{
-              position: 'absolute',
-              top: surfaceTop,
-              left: 0,
-              zIndex: 1,
-            }}
-          >
-            <Defs>
-              <SvgLinearGradient id="voiceActionBase" x1={width * 0.5} y1={0} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#5A3A4C" stopOpacity="0.54" />
-                <Stop offset="0.58" stopColor="#352332" stopOpacity="0.74" />
-                <Stop offset="1" stopColor="#160F18" stopOpacity="0.92" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceSendBase" x1={width * 0.5} y1={surfaceHeight * 0.52} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#452D3C" stopOpacity="0.72" />
-                <Stop offset="1" stopColor="#120C15" stopOpacity="0.96" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceSurfaceSheen" x1={width * 0.5} y1={0} x2={width * 0.5} y2={surfaceHeight * 0.46} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#FFF5F8" stopOpacity="0.08" />
-                <Stop offset="0.38" stopColor="#FFF5F8" stopOpacity="0.028" />
-                <Stop offset="1" stopColor="#FFF5F8" stopOpacity="0" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceSurfaceDepth" x1={width * 0.5} y1={surfaceHeight * 0.24} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#050207" stopOpacity="0" />
-                <Stop offset="0.72" stopColor="#050207" stopOpacity="0.07" />
-                <Stop offset="1" stopColor="#050207" stopOpacity="0.2" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceCancelLift" x1={0} y1={0} x2={width * 0.36} y2={surfaceHeight * 0.5} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#FFF9FB" stopOpacity="0.98" />
-                <Stop offset="0.52" stopColor="#F2E2E8" stopOpacity="0.95" />
-                <Stop offset="1" stopColor="#DCC7D0" stopOpacity="0.92" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceConvertLift" x1={width} y1={0} x2={width * 0.64} y2={surfaceHeight * 0.5} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#FFF9FB" stopOpacity="0.98" />
-                <Stop offset="0.52" stopColor="#F2E2E8" stopOpacity="0.95" />
-                <Stop offset="1" stopColor="#DCC7D0" stopOpacity="0.92" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceSendLift" x1={width * 0.5} y1={surfaceHeight * 0.54} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#EFCEDB" stopOpacity="0.42" />
-                <Stop offset="1" stopColor="#A86983" stopOpacity="0.18" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceNeuCancelRaised" x1={0} y1={0} x2={width * 0.42} y2={surfaceHeight * 0.48} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#D5A9BA" />
-                <Stop offset="0.48" stopColor="#B98298" />
-                <Stop offset="1" stopColor="#9F667D" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceNeuConvertRaised" x1={width} y1={0} x2={width * 0.58} y2={surfaceHeight * 0.48} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#CCD3E6" />
-                <Stop offset="0.48" stopColor="#ADB7D5" />
-                <Stop offset="1" stopColor="#909CBE" />
-              </SvgLinearGradient>
-              <SvgLinearGradient id="voiceNeuSendRaised" x1={width * 0.5} y1={surfaceHeight * 0.48} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                <Stop offset="0" stopColor="#E3DDEF" />
-                <Stop offset="0.46" stopColor="#C9C0DC" />
-                <Stop offset="1" stopColor="#ACA1C1" />
-              </SvgLinearGradient>
-            </Defs>
-
-            {neumorphic ? (
-              <>
-                <Path d={leftActionPath} fill="#3B2936" fillOpacity={0.24} transform="translate(0 3.5)" />
-                <Path d={rightActionPath} fill="#31364A" fillOpacity={0.24} transform="translate(0 3.5)" />
-                <Path d={sendActionPath} fill="#3C3349" fillOpacity={0.26} transform="translate(0 3.5)" />
-                <Path d={leftActionPath} fill="url(#voiceNeuCancelRaised)" opacity={cancelArmed ? 0.96 : 1} />
-                <Path d={rightActionPath} fill="url(#voiceNeuConvertRaised)" opacity={transcribeArmed ? 0.96 : 1} />
-                <Path d={sendActionPath} fill="url(#voiceNeuSendRaised)" opacity={cancelArmed || transcribeArmed ? 0.8 : 1} />
-                <Path d={leftActionPath} fill="none" stroke="rgba(255,246,251,0.58)" strokeWidth={1} />
-                <Path d={rightActionPath} fill="none" stroke="rgba(250,252,255,0.62)" strokeWidth={1} />
-                <Path d={sendActionPath} fill="none" stroke="rgba(255,252,255,0.62)" strokeWidth={1} />
-              </>
-            ) : (
-              <>
-                <Path d={leftActionPath} fill="url(#voiceActionBase)" />
-                <Path d={rightActionPath} fill="url(#voiceActionBase)" />
-                <Path d={sendActionPath} fill="url(#voiceSendBase)" />
-                {!cancelArmed && !transcribeArmed ? <Path d={sendActionPath} fill="url(#voiceSendLift)" /> : null}
-                <Path d={leftActionPath} fill="url(#voiceSurfaceSheen)" />
-                <Path d={rightActionPath} fill="url(#voiceSurfaceSheen)" />
-                <Path d={sendActionPath} fill="url(#voiceSurfaceSheen)" />
-                <Path d={leftActionPath} fill="url(#voiceSurfaceDepth)" />
-                <Path d={rightActionPath} fill="url(#voiceSurfaceDepth)" />
-                <Path d={sendActionPath} fill="url(#voiceSurfaceDepth)" />
-                {cancelArmed ? <Path d={leftActionPath} fill="url(#voiceCancelLift)" /> : null}
-                {transcribeArmed ? <Path d={rightActionPath} fill="url(#voiceConvertLift)" /> : null}
-              </>
-            )}
-          </Svg>
-
-          {neumorphic ? (
-            <MotiView
-              key={`voice-action-${activeAction}`}
-              pointerEvents="none"
-              from={{ opacity: reducedMotion ? 1 : 0.45 }}
-              animate={{ opacity: 1 }}
-              transition={{ type: 'timing', duration: reducedMotion ? 60 : 135 }}
-              style={{
-                position: 'absolute',
-                top: surfaceTop,
-                left: 0,
-                width,
-                height: surfaceHeight,
-                zIndex: 2,
-              }}
-            >
-              <Svg width={width} height={surfaceHeight} viewBox={`0 0 ${width} ${surfaceHeight}`}>
-                <Defs>
-                  <SvgLinearGradient id="voiceNeuCancelInset" x1={0} y1={0} x2={width * 0.42} y2={surfaceHeight * 0.48} gradientUnits="userSpaceOnUse">
-                    <Stop offset="0" stopColor="#8E5870" />
-                    <Stop offset="0.52" stopColor="#B98298" />
-                    <Stop offset="1" stopColor="#D8AEC0" />
-                  </SvgLinearGradient>
-                  <SvgLinearGradient id="voiceNeuConvertInset" x1={width} y1={0} x2={width * 0.58} y2={surfaceHeight * 0.48} gradientUnits="userSpaceOnUse">
-                    <Stop offset="0" stopColor="#8792B3" />
-                    <Stop offset="0.52" stopColor="#ADB7D5" />
-                    <Stop offset="1" stopColor="#D2D8E9" />
-                  </SvgLinearGradient>
-                  <SvgLinearGradient id="voiceNeuSendActive" x1={width * 0.5} y1={surfaceHeight * 0.48} x2={width * 0.5} y2={surfaceHeight} gradientUnits="userSpaceOnUse">
-                    <Stop offset="0" stopColor="#E8E3F3" />
-                    <Stop offset="0.52" stopColor="#C9C0DC" />
-                    <Stop offset="1" stopColor="#A99EBE" />
-                  </SvgLinearGradient>
-                </Defs>
-                {activeAction === 'cancel' ? (
-                  <>
-                    <Path d={leftActionPath} fill="url(#voiceNeuCancelInset)" />
-                    <Path d={leftActionPath} fill="none" stroke="rgba(70,39,54,0.54)" strokeWidth={1.4} transform="translate(0 -0.5)" />
-                    <Path d={leftActionPath} fill="none" stroke="rgba(255,247,251,0.48)" strokeWidth={1} transform="translate(0 1)" />
-                  </>
-                ) : activeAction === 'convert' ? (
-                  <>
-                    <Path d={rightActionPath} fill="url(#voiceNeuConvertInset)" />
-                    <Path d={rightActionPath} fill="none" stroke="rgba(49,55,79,0.52)" strokeWidth={1.4} transform="translate(0 -0.5)" />
-                    <Path d={rightActionPath} fill="none" stroke="rgba(252,253,255,0.50)" strokeWidth={1} transform="translate(0 1)" />
-                  </>
-                ) : (
-                  <>
-                    <Path d={sendActionPath} fill="url(#voiceNeuSendActive)" />
-                    <Path d={sendActionPath} fill="none" stroke="rgba(255,252,255,0.72)" strokeWidth={1.1} />
-                  </>
-                )}
-              </Svg>
-            </MotiView>
-          ) : null}
-
-          <MotiView
-            animate={{ scale: cancelArmed && neumorphic && !reducedMotion ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
-            style={{
-              position: 'absolute',
-              top: zoneLabelTop,
-              left: 0,
-              width: zoneWidth,
-              zIndex: 4,
-            }}
-          >
-            <Text
-            style={{
-              width: '100%',
-              color: cancelArmed ? '#3A1F2B' : neumorphic ? '#4A2D3A' : wechatTheme.ink,
-              fontSize: 14,
-              lineHeight: 19,
-              textAlign: 'center',
-              fontWeight: cancelArmed && neumorphic ? '800' : '600',
-              fontFamily: nativeUiFont,
-              transform: [{ rotate: '-6deg' }],
-            }}
-          >
-            {t.cancel}
-            </Text>
-          </MotiView>
-
-          <MotiView
-            animate={{ scale: transcribeArmed && neumorphic && !reducedMotion ? 1.025 : 1 }}
-            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
-            style={{
-              position: 'absolute',
-              top: zoneLabelTop,
-              right: 0,
-              width: zoneWidth,
-              zIndex: 4,
-            }}
-          >
+          <View style={{ height: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <Text
               numberOfLines={1}
               style={{
-              width: '100%',
-              color: transcribeArmed ? '#293149' : neumorphic ? '#39425E' : wechatTheme.ink,
-              fontSize: width <= 340 ? 12 : 13,
-              lineHeight: 18,
-              textAlign: 'center',
-              fontWeight: transcribeArmed && neumorphic ? '800' : '600',
-              fontFamily: nativeUiFont,
-              transform: [{ rotate: '6deg' }],
-            }}
-          >
-            {transcribeArmed ? t.convertToText : t.slideHereToConvert}
+                flex: 1,
+                minWidth: 0,
+                color: liveInk,
+                fontSize: 12.5,
+                lineHeight: 17,
+                fontWeight: '700',
+                fontFamily: nativeUiFont,
+              }}
+            >
+              {statusLabel}
             </Text>
-          </MotiView>
-
-          <MotiView
-            animate={{ scale: activeAction === 'send' && neumorphic && !reducedMotion ? 1.02 : 1 }}
-            transition={{ type: 'timing', duration: reducedMotion ? 60 : 150 }}
-            style={{
-              position: 'absolute',
-              top: sendLabelTop,
-              left: 0,
-              width,
-              zIndex: 4,
-            }}
-          >
             <Text
               style={{
-              width: '100%',
-              color: cancelArmed || transcribeArmed
-                ? neumorphic ? 'rgba(48,37,55,0.66)' : wechatTheme.ink
-                : neumorphic ? CHAT_BUBBLE_OUTGOING_INK : '#281521',
-              fontSize: 15,
-              lineHeight: 20,
-              textAlign: 'center',
-              fontWeight: activeAction === 'send' && neumorphic ? '800' : '600',
-              fontFamily: nativeUiFont,
-            }}
-          >
-            {cancelArmed || transcribeArmed ? t.voiceGestureMode : t.releaseToSend}
+                color: liveInk,
+                fontSize: 11.5,
+                lineHeight: 16,
+                fontWeight: '700',
+                fontFamily: nativeUiFont,
+                fontVariant: ['tabular-nums'],
+                opacity: 0.72,
+              }}
+            >
+              {timerLabel}
             </Text>
-          </MotiView>
-        </>
+          </View>
+          {terminalFeedback ? (
+            <View style={{ flex: 1, justifyContent: 'center' }}>
+              <View
+                style={{
+                  width: visual.phase === 'converting' ? '72%' : '42%',
+                  height: 4,
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                  backgroundColor: 'rgba(61, 52, 75, 0.16)',
+                }}
+              >
+                <MotiView
+                  from={{ translateX: reducedMotion || visual.phase !== 'converting' ? 0 : -16 }}
+                  animate={{ translateX: reducedMotion || visual.phase !== 'converting' ? 0 : 16 }}
+                  transition={{
+                    type: 'timing',
+                    duration: reducedMotion ? 0 : 220,
+                    loop: !reducedMotion && visual.phase === 'converting',
+                    repeatReverse: true,
+                    easing: MOTION_EASE_OUT,
+                  }}
+                  style={{
+                    width: '72%',
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: waveInk,
+                  }}
+                />
+              </View>
+            </View>
+          ) : (
+            <VoiceWaveform
+              samples={visual.meteringHistory}
+              phase={visual.phase}
+              reducedMotion={reducedMotion}
+              color={waveInk}
+            />
+          )}
+        </VoiceMaterialSurface>
+      </MotiView>
+
+      {!terminalFeedback ? (
+        <MotiView
+          from={{ translateY: reducedMotion ? 0 : 7 }}
+          animate={{ translateY: 0 }}
+          transition={{
+            type: 'timing',
+            duration: reducedMotion ? 0 : 190,
+            easing: MOTION_EASE_OUT,
+          }}
+          style={{
+            position: 'absolute',
+            right: (width - controlWidth) / 2,
+            bottom: controlBottom,
+            left: (width - controlWidth) / 2,
+            width: controlWidth,
+            height: controlHeight,
+          }}
+        >
+          <VoiceMaterialSurface
+            testID="voice-gesture-control-track"
+            neumorphic={neumorphic}
+            depth="raised"
+            tone="lavender"
+            radius={24}
+            style={{ width: '100%', height: '100%' }}
+            contentStyle={{ padding: trackInset }}
+          >
+            <VoiceMaterialSurface
+              neumorphic={neumorphic}
+              depth="inset"
+              tone="lavender"
+              radius={18}
+              style={{ width: trackWidth, height: controlHeight - trackInset * 2 }}
+              contentStyle={{ position: 'relative', overflow: 'hidden' }}
+            >
+              <MotiView
+                testID="voice-gesture-active-segment"
+                animate={{
+                  translateX: visual.gesturePosition * segmentWidth,
+                }}
+                transition={{
+                  type: 'timing',
+                  duration: reducedMotion ? 0 : VOICE_TRACK_FOLLOW_MS,
+                  easing: MOTION_EASE_OUT,
+                }}
+                style={{
+                  position: 'absolute',
+                  top: 4,
+                  left: 0,
+                  width: segmentWidth,
+                  bottom: 4,
+                  borderRadius: 14,
+                  borderCurve: 'continuous',
+                  backgroundColor: activeAction === 'cancel'
+                    ? 'rgba(163, 88, 113, 0.28)'
+                    : activeAction === 'convert'
+                      ? 'rgba(99, 116, 164, 0.24)'
+                      : 'rgba(255, 249, 255, 0.19)',
+                  boxShadow: neumorphic
+                    ? 'inset 3px 3px 7px rgba(48,35,61,0.25), inset -3px -3px 7px rgba(255,252,255,0.28)'
+                    : 'inset 3px 3px 7px rgba(4,2,8,0.42), inset -2px -2px 5px rgba(255,240,248,0.10)',
+                }}
+              />
+
+              <View style={{ flex: 1, flexDirection: 'row' }}>
+                {actionItems.map(item => {
+                  const active = item.action === activeAction;
+                  const color = active
+                    ? item.action === 'cancel'
+                      ? '#512536'
+                      : item.action === 'convert'
+                        ? '#2F3958'
+                        : neumorphicPalette.onLightPrimary
+                    : neumorphic
+                      ? 'rgba(48,37,55,0.62)'
+                      : 'rgba(255,241,248,0.62)';
+                  return (
+                    <View
+                      key={item.action}
+                      style={{
+                        width: segmentWidth,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        paddingHorizontal: 5,
+                      }}
+                    >
+                      <ActionGlyph
+                        action={item.action}
+                        active={active}
+                        meteringLevel={visual.meteringHistory.at(-1) ?? visual.meteringLevel}
+                        reducedMotion={reducedMotion}
+                        color={color}
+                      />
+                      <Text
+                        numberOfLines={width <= 340 ? 2 : 1}
+                        style={{
+                          maxWidth: '100%',
+                          minHeight: width <= 340 ? 24 : 16,
+                          color,
+                          fontSize: width <= 340 ? 10.5 : 12,
+                          lineHeight: width <= 340 ? 12 : 16,
+                          textAlign: 'center',
+                          fontWeight: active ? '800' : '600',
+                          fontFamily: nativeUiFont,
+                        }}
+                      >
+                        {item.label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </VoiceMaterialSurface>
+          </VoiceMaterialSurface>
+        </MotiView>
       ) : null}
     </View>
   );

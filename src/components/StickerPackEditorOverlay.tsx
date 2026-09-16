@@ -9,6 +9,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import type { StickerAsset } from '../types';
@@ -55,6 +56,8 @@ export function StickerPackEditorOverlay({
   onRequestReplace,
   labels,
 }: StickerPackEditorOverlayProps) {
+  const { height } = useWindowDimensions();
+  const editorSheetHeight = Math.min(680, Math.max(420, height * 0.82));
   const copy = useMemo(() => ({
     title: labels?.title ?? '编辑表情',
     name: labels?.name ?? '名称',
@@ -105,7 +108,7 @@ export function StickerPackEditorOverlay({
 
   return (
     <Modal
-      animationType="fade"
+      animationType="none"
       onRequestClose={onClose}
       presentationStyle="overFullScreen"
       transparent
@@ -120,10 +123,11 @@ export function StickerPackEditorOverlay({
         }}
       >
         <NeumorphicSurface
+          testID="sticker-editor-sheet"
           depth="raised"
           tone="lavender"
           radius={24}
-          style={{ marginHorizontal: 10, marginBottom: 10, maxHeight: '88%' }}
+          style={{ height: editorSheetHeight, marginHorizontal: 10, marginBottom: 10 }}
           contentStyle={{ overflow: 'hidden' }}
         >
           <View
@@ -309,4 +313,3 @@ export function StickerPackEditorOverlay({
     </Modal>
   );
 }
-

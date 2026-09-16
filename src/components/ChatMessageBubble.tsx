@@ -1,7 +1,20 @@
-import { useCallback, useState, type ReactNode } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { Image } from 'expo-image';
 import { MotiView } from 'moti';
+import Animated, {
+  Easing,
+  LinearTransition,
+  ReduceMotion,
+  useReducedMotion,
+} from 'react-native-reanimated';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -28,6 +41,7 @@ import {
 } from '../services/nativeAudioPlaybackRuntime';
 import { createSpeechSynthesisPlan } from '../services/mediaRuntime';
 import { speakSpeechSynthesisPlan, stopSpeechSynthesis } from '../services/nativeSpeechRuntime';
+import { toSpeakableText } from '../services/speakableText';
 import { useNanaStore } from '../stores/nanaStore';
 import type { Character, Message, Payment } from '../types';
 import { triggerHaptic } from '../utils/haptics';
@@ -56,57 +70,106 @@ interface Props {
   bubbleVariant: ChatBubbleMaterialVariant;
 }
 
-const VOICE_WAVEFORM_BARS = [8, 13, 18, 11, 16, 22, 14, 9, 19, 13, 17, 10, 21, 15, 8, 13] as const;
+const VOICE_WAVEFORM_BARS = [
+  7, 11, 16, 10, 19, 14, 8, 13, 21, 16, 11, 18,
+  9, 15, 22, 13, 8, 17, 12, 20, 14, 9, 16, 11,
+] as const;
+const VOICE_TRANSCRIPT_LAYOUT = LinearTransition
+  .duration(160)
+  .easing(Easing.bezier(0.22, 1, 0.36, 1))
+  .reduceMotion(ReduceMotion.System);
 
 function VoiceWaveform({
   ink,
   progress,
+  isPlaying,
+  indeterminate = false,
+  reducedMotion,
 }: {
   ink: string;
   progress: number;
+  isPlaying: boolean;
+  indeterminate?: boolean;
+  reducedMotion: boolean;
 }) {
   const normalizedProgress = Math.max(0, Math.min(1, progress));
-  const renderBars = () => VOICE_WAVEFORM_BARS.map((barHeight, index) => (
-    <View
-      key={`${barHeight}-${index}`}
-      style={{
-        flex: 1,
-        maxWidth: 3,
-        height: barHeight,
-        borderRadius: 2,
-        backgroundColor: index / VOICE_WAVEFORM_BARS.length <= normalizedProgress
-          ? ink
-          : `${ink}70`,
-      }}
-    />
-  ));
+  const [activityCursor, setActivityCursor] = useState(0);
+
+  useEffect(() => {
+    if (!indeterminate || !isPlaying || reducedMotion) {
+      setActivityCursor(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setActivityCursor(value => (value + 1) % VOICE_WAVEFORM_BARS.length);
+    }, 90);
+    return () => clearInterval(timer);
+  }, [indeterminate, isPlaying, reducedMotion]);
 
   return (
     <View
       style={{
-        height: 22,
+        height: 24,
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 2,
         overflow: 'hidden',
       }}
     >
-      {renderBars()}
-      <MotiView
-        pointerEvents="none"
-        animate={{ scaleX: Math.max(0.001, normalizedProgress) }}
-        transition={{ type: 'timing', duration: 140 }}
-        style={{
-          position: 'absolute',
-          right: 0,
-          bottom: 0,
-          left: 0,
-          height: 1.5,
-          borderRadius: 1,
-          backgroundColor: `${ink}B8`,
-          transformOrigin: 'left center',
-        }}
-      />
+      {VOICE_WAVEFORM_BARS.map((barHeight, index) => {
+        const playedAmount = Math.max(
+          0,
+          Math.min(1, normalizedProgress * VOICE_WAVEFORM_BARS.length - index),
+        );
+        const clockDistance = Math.abs(
+          normalizedProgress * (VOICE_WAVEFORM_BARS.length - 1) - index,
+        );
+        const clockFocusAmount = isPlaying && !indeterminate && !reducedMotion
+          ? Math.max(0, 1 - clockDistance / 1.75)
+          : 0;
+        const activityDistance = Math.abs(activityCursor - index);
+        const wrappedActivityDistance = Math.min(
+          activityDistance,
+          VOICE_WAVEFORM_BARS.length - activityDistance,
+        );
+        const activityAmount = indeterminate && isPlaying && !reducedMotion
+          ? Math.max(0, 0.72 - wrappedActivityDistance * 0.2)
+          : 0;
+
+        return (
+          <MotiView
+            key={`${barHeight}-${index}`}
+            animate={{ scaleY: 1 + clockFocusAmount * 0.08 }}
+            transition={{
+              type: 'timing',
+              duration: reducedMotion || !isPlaying ? 0 : 130,
+            }}
+            style={{
+              flex: 1,
+              maxWidth: 2.5,
+              height: barHeight,
+              borderRadius: 2,
+              overflow: 'hidden',
+              backgroundColor: `${ink}38`,
+            }}
+          >
+            <MotiView
+              pointerEvents="none"
+              animate={{ opacity: Math.max(playedAmount, activityAmount) }}
+              transition={{
+                type: 'timing',
+                duration: reducedMotion || !isPlaying ? 0 : 130,
+              }}
+              style={{
+                ...StyleSheet.absoluteFillObject,
+                borderRadius: 2,
+                backgroundColor: ink,
+              }}
+            />
+          </MotiView>
+        );
+      })}
     </View>
   );
 }
@@ -193,7 +256,6 @@ const formatPaymentAmount = (amountMinor: number) => `\u00A5${(Math.max(0, amoun
 const lightBubbleInk = neumorphicPalette.onLightPrimary;
 const lightBubbleSecondary = neumorphicPalette.onLightSecondary;
 const lightBubbleAccent = '#653D55';
-const lightBubbleMemory = '#48506B';
 
 function paymentStatusLabel(payment: Payment, characterName: string, t: Record<string, string>) {
   if (payment.status === 'sending') return t.processing;
@@ -407,6 +469,9 @@ export function ChatMessageBubble({
   const isImage = msg.type === 'image' && !!msg.imageUri;
   const isSticker = msg.type === 'sticker' && !!msg.stickerUri;
   const isVoice = msg.type === 'voice';
+  const voiceTranscriptionFailed = msg.sender === 'user'
+    && isVoice
+    && msg.voiceTranscriptionStatus === 'failed';
   const isVideoCallEvent = msg.sender === 'system' && (/\bvideo call\b/i.test(msg.text) || /视频通话/.test(msg.text));
   const isCallEvent = msg.sender === 'system' && (/\b(voice|video) call\b/i.test(msg.text) || /(语音通话|视频通话|通话)/.test(msg.text));
   const isMemoryEvent = msg.sender === 'system' && (/\b(memory|remembered|timeline)\b/i.test(msg.text) || /(记忆|记住|回忆)/.test(msg.text));
@@ -511,7 +576,7 @@ export function ChatMessageBubble({
       autoplay
       cachePolicy="memory-disk"
       contentFit="contain"
-      transition={100}
+      transition={0}
       accessible
       accessibilityLabel={msg.stickerName || (t.stickers ?? 'Sticker')}
       style={{ width: stickerBubbleWidth, height: stickerBubbleWidth }}
@@ -539,7 +604,7 @@ export function ChatMessageBubble({
           ink={messageInk}
         />
       ) : isImage && msg.imageUri ? (
-        <Image source={{ uri: msg.imageUri }} contentFit="cover" transition={140} accessible accessibilityLabel={t.photo} style={{ width: imageBubbleWidth, height: imageBubbleHeight, backgroundColor: neumorphicPalette.incoming }} />
+        <Image source={{ uri: msg.imageUri }} contentFit="cover" cachePolicy="memory-disk" transition={0} accessible accessibilityLabel={t.photo} style={{ width: imageBubbleWidth, height: imageBubbleHeight, backgroundColor: neumorphicPalette.incoming }} />
       ) : (
         <Text selectable style={{ color: messageInk, fontSize: 15, lineHeight: 22, flexShrink: 1, includeFontPadding: false, textAlign: 'left' }}>{msg.text}</Text>
       )}
@@ -641,6 +706,28 @@ export function ChatMessageBubble({
         </View>
       ) : null}
 
+      {voiceTranscriptionFailed ? (
+        <View
+          testID={`voice-transcription-${msg.id}`}
+          style={{ minHeight: 24, alignItems: 'flex-end', justifyContent: 'center', paddingRight: 50, marginTop: 1 }}
+        >
+          <AnimatedPressable
+            accessibilityRole="button"
+            accessibilityLabel={`${t.voiceTranscriptionFailed}. ${t.retryMessage}`}
+            accessibilityHint={t.voiceTranscriptionRetryHint}
+            disabled={isGenerating}
+            hitSlop={8}
+            onPress={isGenerating ? undefined : onRetry}
+            style={{ minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 5, opacity: isGenerating ? 0.5 : 1 }}
+          >
+            <CircleAlert size={12} color={wechatTheme.peach} strokeWidth={1.9} />
+            <Text style={{ color: wechatTheme.peach, fontSize: 11, lineHeight: 15, fontWeight: '600' }}>
+              {t.voiceTranscriptionFailed} · {t.retryMessage}
+            </Text>
+          </AnimatedPressable>
+        </View>
+      ) : null}
+
       <PaymentDetailSheet payment={payment} characterName={characterName} visible={paymentDetailsVisible} onClose={() => setPaymentDetailsVisible(false)} />
     </View>
   );
@@ -661,15 +748,20 @@ function VoiceBubbleContent({
 }) {
   const { t } = useApp();
   const playback = useNativeVoicePlayback(msg.audioUri);
+  const reducedMotion = useReducedMotion();
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptMenuOpen, setTranscriptMenuOpen] = useState(false);
   const [deviceSpeaking, setDeviceSpeaking] = useState(false);
+  const longPressHandledRef = useRef(false);
   const activeChatId = useNanaStore(state => state.activeChatId);
   const speechLanguage = useNanaStore(state => state.speechLanguage);
   const activeCharacter = useNanaStore(state => (
     state.characters.find(character => character.id === activeChatId)
   ));
+  const hasTranscript = !!msg.transcript?.trim();
+  const speakableTranscript = toSpeakableText(msg.transcript || '');
   const canUseDeviceSpeech = msg.sender === 'char'
-    && !!msg.transcript?.trim()
+    && !!speakableTranscript
     && activeCharacter?.supportsVoiceReply === true;
   const canPlayVoice = playback.canPlay || canUseDeviceSpeech;
   const handlePlayback = useCallback(() => {
@@ -703,44 +795,125 @@ function VoiceBubbleContent({
     playback,
     speechLanguage,
   ]);
+  const handleTranscriptMenu = useCallback(() => {
+    if (!hasTranscript || selectMode) return;
+    longPressHandledRef.current = true;
+    triggerHaptic('light');
+    setTranscriptMenuOpen(true);
+  }, [hasTranscript, selectMode]);
+  const toggleTranscript = useCallback(() => {
+    triggerHaptic('light');
+    setTranscriptOpen(value => !value);
+    setTranscriptMenuOpen(false);
+  }, []);
+  const handleVoicePress = useCallback(() => {
+    if (longPressHandledRef.current) return;
+    if (transcriptMenuOpen) {
+      toggleTranscript();
+      return;
+    }
+    handlePlayback();
+  }, [handlePlayback, toggleTranscript, transcriptMenuOpen]);
   const duration = Math.max(0, Math.round(msg.audioDurationSec || playback.durationSec || 0));
   const elapsed = Math.min(duration, Math.max(0, Math.floor(playback.positionSec)));
-  const durationLabel = playback.isPlaying || playback.progress > 0
-    ? `${formatVoiceDuration(elapsed)} / ${formatVoiceDuration(duration)}`
+  const durationLabel = playback.isPlaying
+    ? formatVoiceDuration(elapsed)
     : formatVoiceDuration(duration);
 
   return (
-    <View style={{ width: '100%' }}>
+    <Animated.View
+      collapsable={false}
+      layout={VOICE_TRANSCRIPT_LAYOUT}
+      style={{ width: '100%' }}
+    >
       <Pressable
+        testID={transcriptMenuOpen
+          ? `voice-transcript-action-${msg.id}`
+          : `voice-message-${msg.id}`}
         accessibilityRole="button"
-        accessibilityLabel={selectMode ? (isSelected ? t.deselectMessage : t.selectMessage) : canPlayVoice ? (playback.isPlaying || deviceSpeaking ? t.pauseVoice : t.playVoice) : t.voiceMessage}
-        accessibilityState={selectMode ? { selected: isSelected } : { disabled: !canPlayVoice }}
-        onPress={selectMode ? onSelect : canPlayVoice ? handlePlayback : undefined}
-        disabled={!selectMode && !canPlayVoice}
-        style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+        accessibilityLabel={selectMode
+          ? (isSelected ? t.deselectMessage : t.selectMessage)
+          : transcriptMenuOpen
+            ? (transcriptOpen ? t.hideTranscript : t.showTranscript)
+            : canPlayVoice
+              ? (playback.isPlaying || deviceSpeaking ? t.pauseVoice : t.playVoice)
+              : t.voiceMessage}
+        accessibilityHint={!selectMode && hasTranscript && !transcriptMenuOpen
+          ? t.voiceTranscriptLongPressHint
+          : undefined}
+        accessibilityState={selectMode
+          ? { selected: isSelected }
+          : { disabled: !canPlayVoice && !hasTranscript }}
+        accessibilityActions={!selectMode && hasTranscript
+          ? [{ name: 'longpress', label: transcriptOpen ? t.hideTranscript : t.showTranscript }]
+          : undefined}
+        onAccessibilityAction={event => {
+          if (event.nativeEvent.actionName === 'longpress') handleTranscriptMenu();
+        }}
+        onPressIn={() => {
+          longPressHandledRef.current = false;
+        }}
+        onLongPress={selectMode || !hasTranscript ? undefined : handleTranscriptMenu}
+        delayLongPress={420}
+        onPress={selectMode
+          ? onSelect
+          : transcriptMenuOpen || canPlayVoice
+            ? handleVoicePress
+            : undefined}
+        disabled={!selectMode && !canPlayVoice && !hasTranscript}
+        style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 9 }}
       >
-        <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: `${ink}1F` }}>
-          {canPlayVoice
-            ? playback.isPlaying || deviceSpeaking
-              ? <Pause size={14} color={ink} fill={ink} />
-              : <Play size={14} color={ink} fill={ink} />
-            : <AudioLines size={16} color={`${ink}C7`} strokeWidth={1.7} />}
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <VoiceWaveform ink={ink} progress={playback.progress} />
-          <Text style={{ color: `${ink}C7`, fontSize: 11, lineHeight: 15, marginTop: 2, fontVariant: ['tabular-nums'] }}>{durationLabel}</Text>
-        </View>
+        {transcriptMenuOpen ? (
+          <View style={{ minHeight: 30, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <AudioLines size={16} color={`${ink}CC`} strokeWidth={1.8} />
+            <Text style={{ flex: 1, color: `${ink}E0`, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>
+              {transcriptOpen ? t.hideTranscript : t.showTranscript}
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={{ width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: `${ink}1F` }}>
+              {canPlayVoice
+                ? playback.isPlaying || deviceSpeaking
+                  ? <Pause size={13} color={ink} fill={ink} />
+                  : <Play size={13} color={ink} fill={ink} />
+                : <AudioLines size={16} color={`${ink}C7`} strokeWidth={1.7} />}
+            </View>
+            <VoiceWaveform
+              ink={ink}
+              progress={playback.progress}
+              isPlaying={playback.isPlaying || deviceSpeaking}
+              indeterminate={deviceSpeaking && !playback.canPlay}
+              reducedMotion={reducedMotion}
+            />
+            <Text style={{ minWidth: 34, textAlign: 'right', color: `${ink}C7`, fontSize: 11, lineHeight: 15, fontVariant: ['tabular-nums'] }}>
+              {durationLabel}
+            </Text>
+          </>
+        )}
       </Pressable>
 
-      {msg.transcript?.trim() ? (
-        <View style={{ marginTop: 6, borderTopWidth: 0.5, borderTopColor: `${ink}2E`, paddingTop: 7 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={transcriptOpen ? t.hideTranscript : t.showTranscript} onPress={() => setTranscriptOpen(value => !value)} style={{ minHeight: 44, justifyContent: 'center' }}>
-            <Text style={{ color: lightBubbleMemory, fontSize: 11, lineHeight: 15, fontWeight: '600' }}>{transcriptOpen ? t.hideTranscript : t.showTranscript}</Text>
-          </Pressable>
-          {transcriptOpen ? <Text selectable style={{ color: `${ink}D6`, fontSize: 13, lineHeight: 19, paddingBottom: 2 }}>{msg.transcript}</Text> : null}
+      {hasTranscript && transcriptOpen ? (
+        <View
+          testID={`voice-transcript-region-${msg.id}`}
+          style={{
+            marginTop: 5,
+            borderTopWidth: 0.5,
+            borderTopColor: `${ink}2E`,
+            paddingTop: 9,
+            paddingBottom: 5,
+          }}
+        >
+          <Text
+            testID={`voice-transcript-text-${msg.id}`}
+            selectable
+            style={{ color: `${ink}D6`, fontSize: 13, lineHeight: 19 }}
+          >
+            {msg.transcript}
+          </Text>
         </View>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 

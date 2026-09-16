@@ -197,7 +197,8 @@ export function BottomDock({ compact = false }: { compact?: boolean }) {
         <ExpoImage
           source={require('../../../assets/generated/nana-2_5d/nana-cloud-dock-v2-clean-v2.png')}
           contentFit="fill"
-          transition={120}
+          cachePolicy="memory-disk"
+          transition={0}
           style={StyleSheet.absoluteFillObject}
         />
       )}

@@ -54,6 +54,22 @@ expect(
   'the runtime must schedule a local inexact reminder without exact-alarm permission',
 );
 expect(
+  runtime.includes("PROACTIVE_NOTIFICATION_CHANNEL_ID = 'relationship-messages-v2'")
+    && runtime.includes('AndroidImportance.HIGH')
+    && runtime.includes('AndroidNotificationPriority.HIGH'),
+  'background relationship messages must use a fresh high-visibility Android channel',
+);
+expect(
+  runtime.includes('createLocalProactiveMessage({')
+    && runtime.includes('body: plan.previewText')
+    && runtime.includes("sound: 'default'"),
+  'closed-app notifications must show a persona-shaped local message instead of a generic reminder',
+);
+expect(
+  !layout.includes('dismissPresentedProactiveNotifications'),
+  'opening Nana from the launcher must not erase an unread relationship notification',
+);
+expect(
   !runtime.includes('fetch(')
     && !runtime.includes('generateProactiveReply')
     && settings.includes('proactiveNotificationsCostPolicy'),

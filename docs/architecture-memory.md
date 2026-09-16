@@ -20,6 +20,9 @@ memory, native media, or new app surfaces.
 - Storage recovery helpers live in `src/services/storage.ts`.
 - Relationship trace helpers live in
   `src/repositories/relationshipTraceRepository.ts`.
+- The standalone Meeting feature lives in `src/features/meeting/`; its native
+  scene repository is `src/repositories/meetingRepository.native.ts`, with a
+  contract-compatible web repository for smoke tests.
 
 ## Store Model
 
@@ -189,9 +192,11 @@ suppressed. AI context excludes stale and suppressed evidence, reserves recall
 budget for verified traces first, and injects them once in an explicit
 authoritative section.
 
-The future offline-meeting app will own raw scene sessions, turns, choices, and
-checkpoints. `RelationshipTrace` stores only recallable relationship outcomes;
-it is not the scene save file.
+The implemented offline Meeting app owns raw scene sessions, turns, choices,
+status snapshots, and checkpoints in its dedicated repository. When a scene is
+completed, the review flow converts only selected memory drafts into
+idempotent `offlineScene` traces. `RelationshipTrace` stores recallable
+relationship outcomes; it is not the scene save file.
 
 ## AI Service Boundary
 

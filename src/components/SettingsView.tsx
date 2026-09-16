@@ -91,6 +91,42 @@ function SettingsButton({
   );
 }
 
+function SettingsStatus({
+  message,
+  testID,
+  height,
+}: {
+  message: string;
+  testID: string;
+  height: number;
+}) {
+  return (
+    <View
+      testID={testID}
+      accessibilityLiveRegion="polite"
+      style={{
+        height,
+        justifyContent: 'center',
+        overflow: 'hidden',
+      }}
+    >
+      {message ? (
+        <Text
+          selectable
+          numberOfLines={Math.max(1, Math.floor(height / 17))}
+          style={{
+            color: neumorphicPalette.onLightSecondary,
+            fontSize: 12,
+            lineHeight: 17,
+          }}
+        >
+          {message}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 export function SettingsView() {
   const { t } = useApp();
   const tempApiUrl = useNanaStore(s => s.tempApiUrl);
@@ -137,7 +173,6 @@ export function SettingsView() {
             : 'API Key is available for this browser session only and will not be stored locally.')
         : 'API Key cleared.';
       setApiKeyStatus(status);
-      Alert.alert('API Settings', status);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nana could not save the API settings.';
       setApiKeyStatus(message);
@@ -154,7 +189,6 @@ export function SettingsView() {
       await clearApiKey();
       set({ apiUrl: '', apiKey: '', tempApiUrl: '', tempApiKey: '' });
       setApiKeyStatus('API URL and API Key cleared.');
-      Alert.alert('API Settings', 'API URL and API Key cleared.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nana could not clear the API Key.';
       setApiKeyStatus(message);
@@ -164,7 +198,7 @@ export function SettingsView() {
     }
   };
 
-  const persistVoiceSettings = async (showAlert: boolean) => {
+  const persistVoiceSettings = async () => {
     const voiceApiKey = await saveVoiceApiKey(tempVoiceApiKey);
     const sttModel = mosslandVoiceSelected
       ? MOSSLAND_STT_MODEL
@@ -183,14 +217,13 @@ export function SettingsView() {
       tempVoiceTtsModel: ttsModel,
     });
     setVoiceStatus(t.voiceSettingsSaved);
-    if (showAlert) Alert.alert(t.voiceService, t.voiceSettingsSaved);
   };
 
   const handleSaveVoiceConfig = async () => {
     setIsSavingVoice(true);
     setVoiceStatus('');
     try {
-      await persistVoiceSettings(true);
+      await persistVoiceSettings();
     } catch (error) {
       const message = error instanceof Error ? error.message : t.voiceNotConfigured;
       setVoiceStatus(message);
@@ -230,7 +263,7 @@ export function SettingsView() {
     setIsSavingVoice(true);
     setVoiceStatus('');
     try {
-      await persistVoiceSettings(false);
+      await persistVoiceSettings();
       await useNanaStore.getState().previewCharacterVoice();
     } catch (error) {
       const message = error instanceof Error ? error.message : t.voiceNotConfigured;
@@ -311,9 +344,11 @@ export function SettingsView() {
             </View>
           </View>
 
-          {apiKeyStatus ? (
-            <Text selectable style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12, lineHeight: 17, marginTop: 12 }}>{apiKeyStatus}</Text>
-          ) : null}
+          <SettingsStatus
+            testID="settings-api-status-slot"
+            message={apiKeyStatus}
+            height={36}
+          />
 
           <View style={{ marginTop: 13, marginBottom: 10 }}>
             <SettingsButton
@@ -543,11 +578,11 @@ export function SettingsView() {
             ) : null}
           </View>
 
-          {voiceStatus ? (
-            <Text selectable style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12, lineHeight: 17 }}>
-              {voiceStatus}
-            </Text>
-          ) : null}
+          <SettingsStatus
+            testID="settings-voice-status-slot"
+            message={voiceStatus}
+            height={36}
+          />
         </NeumorphicSurface>
 
         <NeumorphicSurface

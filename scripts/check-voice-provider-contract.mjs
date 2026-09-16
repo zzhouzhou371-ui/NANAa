@@ -102,6 +102,9 @@ const playbackSource = readFileSync(resolve(root, 'src/services/nativeAudioPlayb
 const speechSource = readFileSync(resolve(root, 'src/services/nativeSpeechRuntime.ts'), 'utf8');
 const audioAiSource = readFileSync(resolve(root, 'src/services/audioAiRuntime.ts'), 'utf8');
 const bubbleSource = readFileSync(resolve(root, 'src/components/ChatMessageBubble.tsx'), 'utf8');
+const mediaSource = readFileSync(resolve(root, 'src/services/mediaRuntime.ts'), 'utf8');
+const speakableSource = readFileSync(resolve(root, 'src/services/speakableText.ts'), 'utf8');
+const transcriptionGuardSource = readFileSync(resolve(root, 'src/services/voiceTranscriptionGuard.ts'), 'utf8');
 
 expect(storeSource.includes('resolveVoiceProvider({'), 'chat and call voice work must resolve the selected voice provider');
 expect(settingsSource.includes('voiceProviderEnabled'), 'Settings must expose the separate voice provider switch');
@@ -120,6 +123,40 @@ expect(audioAiSource.includes("form.append('response_format', 'json')"), 'Mossla
 expect(audioAiSource.includes("voice_id: voiceId"), 'Mossland TTS must send the documented voice_id field');
 expect(!audioAiSource.includes('moss-transcribe-diarize'), 'Nana must not invent or opt into an undocumented streaming transcription flow');
 expect(bubbleSource.includes('speakSpeechSynthesisPlan'), 'stored voice messages without remote audio must remain playable through device speech');
+expect(bubbleSource.includes('onLongPress={selectMode || !hasTranscript ? undefined : handleTranscriptMenu}'), 'voice transcripts must be revealed from a long-press action instead of a permanent control');
+expect(bubbleSource.includes('voice-transcript-action-'), 'the long-press transcript menu must expose a focused action target');
+expect(bubbleSource.includes('const [transcriptOpen, setTranscriptOpen] = useState(false)'), 'voice transcripts must be hidden by default');
+expect(bubbleSource.includes('VOICE_TRANSCRIPT_LAYOUT = LinearTransition'), 'transcript expansion must use a native layout transition instead of JS height animation');
+expect(bubbleSource.includes('.duration(160)') && bubbleSource.includes('.reduceMotion(ReduceMotion.System)'), 'transcript layout motion must stay short and respect reduced-motion settings');
+expect(bubbleSource.includes('layout={VOICE_TRANSCRIPT_LAYOUT}'), 'the voice bubble must apply the native layout transition to its changing content size');
+expect(bubbleSource.includes('transcriptMenuOpen || canPlayVoice'), 'the transcript action must remain tappable even when the voice audio itself cannot play');
+const voiceBubbleSource = bubbleSource.slice(
+  bubbleSource.indexOf('function VoiceBubbleContent'),
+  bubbleSource.indexOf('const formatVoiceDuration'),
+);
+expect(!voiceBubbleSource.includes('animate={{ opacity'), 'transcript interactions must not fade content in or out');
+expect(!voiceBubbleSource.includes("type: 'spring'"), 'transcript interactions must not use spring or bounce motion');
+expect(!voiceBubbleSource.includes('transcriptContentHeight'), 'voice bubbles must not render and measure a duplicate hidden transcript');
+expect(!voiceBubbleSource.includes('animate={{ height'), 'voice bubbles must not animate layout height on the JS render path');
+expect((voiceBubbleSource.match(/\{msg\.transcript\}/g) || []).length === 1, 'each voice bubble must render transcript text only once');
+expect(bubbleSource.includes('useReducedMotion()'), 'voice playback motion must respect the device reduced-motion setting');
+expect(bubbleSource.includes('playedAmount'), 'voice waveform bars must respond continuously to playback progress');
+expect(bubbleSource.includes('clockFocusAmount'), 'real audio playback must keep a restrained active window on the current playback position');
+expect(bubbleSource.includes('indeterminate={deviceSpeaking && !playback.canPlay}'), 'device-speech fallback must use an honest activity scan instead of fake audio amplitudes');
+expect(mediaSource.includes('toSpeakableText(text)'), 'device speech plans must strip non-speakable content at their boundary');
+expect(audioAiSource.includes('toSpeakableText(params.text)'), 'remote TTS requests must strip non-speakable content at their boundary');
+expect(speakableSource.includes('Extended_Pictographic'), 'speakable-text cleanup must remove Unicode emoji');
+expect(speakableSource.includes('SPEAKABLE_CHARACTER_PATTERN'), 'symbol-only replies must not enter TTS');
+expect(storeSource.includes("if (replyType === 'voice' && charVoiceDraft)"), 'symbol-only chat replies must fall back to their original visible text without starting TTS');
+expect(storeSource.includes("if (replyType === 'voice' && toSpeakableText(replyText))"), 'symbol-only call replies must remain as captions without starting TTS');
+expect(transcriptionGuardSource.includes('VOICE_TRANSCRIPTION_SPEECH_DB = -45'), 'local transcription must use a conservative measured speech-energy threshold');
+expect(transcriptionGuardSource.includes('VOICE_TRANSCRIPTION_MIN_VOICED_SAMPLES = 2'), 'one microphone spike must not be enough to start STT');
+const transcribeUnsafeSource = audioAiSource.slice(
+  audioAiSource.indexOf('async function transcribeAudioCaptureUnsafe'),
+  audioAiSource.indexOf('export async function transcribeAudioCapture'),
+);
+expect(transcribeUnsafeSource.indexOf('evaluateLocalVoiceTranscription(') < transcribeUnsafeSource.lastIndexOf("params.capture.phase === 'ready'"), 'local silence must be checked before an existing transcript can be accepted');
+expect(storeSource.includes("voiceTranscriptionStatus: localSpeechRejected ? 'unavailable' : 'failed'"), 'sent silent audio must remain a normal voice bubble instead of showing a retry failure');
 expect(storeSource.includes('cancelActiveCallVoiceRequest();'), 'ending or replacing a call must cancel in-flight voice requests');
 expect(storeSource.includes('stopSharedVoiceMessagePlayback();'), 'calls must release chat voice playback before starting');
 expect(storeSource.includes('invalidateActiveCallVoiceInput:'), 'mute and background transitions must abort active STT, model, and TTS work');

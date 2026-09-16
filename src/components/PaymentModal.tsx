@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { Gift, SendHorizontal, X } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
+import { useStableViewportMetrics } from '../hooks/useStableViewportMetrics';
 import { parsePaymentAmountToMinor } from '../services/paymentRuntime';
 import { useNanaStore } from '../stores/nanaStore';
 import { AnimatedPressable } from './primitives';
@@ -20,7 +21,7 @@ export function PaymentModal() {
   const activeChatId = useNanaStore(state => state.activeChatId);
   const characters = useNanaStore(state => state.characters);
   const set = useNanaStore.setState;
-  const { width, height } = useWindowDimensions();
+  const { width, height, compactHeight } = useStableViewportMetrics();
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const keyboardInset = useKeyboardHeight();
@@ -33,7 +34,7 @@ export function PaymentModal() {
   const actionTone: NeumorphicTone = isTransfer ? 'transfer' : 'redPacket';
   const amountMinor = useMemo(() => parsePaymentAmountToMinor(paymentAmount), [paymentAmount]);
   const sheetWidth = Math.min(width, 430);
-  const compact = height < 700;
+  const compact = compactHeight;
 
   const dismissPaymentKeyboard = useCallback(() => {
     amountInputRef.current?.blur();

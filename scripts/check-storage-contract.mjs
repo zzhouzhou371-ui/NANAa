@@ -65,6 +65,48 @@ const deletedStagedAvatarUris = [];
 const deletedFinalAvatarUris = [];
 let reconcileCount = 0;
 let durableChatHistory = {};
+const emptyMeetingArchive = {
+  repositorySchemaVersion: 1,
+  exportedAt: 1,
+  scenes: [],
+  snapshots: [],
+  memoryDrafts: [],
+};
+const meetingNarrativeConfig = {
+  schemaVersion: 1,
+  statusFields: { scene: [], character: [] },
+  statusTemplate: { html: '<section>{{scene.location}}</section>', css: '', height: 96 },
+  miniTheater: { mode: 'off', prompt: '', html: '<p>{{content}}</p>', css: '', height: 96 },
+  narrative: {
+    stylePrompt: 'Restrained sensory prose.',
+    length: { min: 400, target: 800, max: 1_200 },
+    narrationPerson: 'third',
+    userAddress: { mode: 'secondPerson', customLabel: '' },
+    characterAddress: { mode: 'name', customLabel: '' },
+    dialogueRatio: 35,
+    paragraphDensity: 'balanced',
+    layout: 'pureNovel',
+    showChapterTitle: true,
+    showLeadQuote: true,
+    bannedTerms: ['a knowing smile'],
+    enforcement: 'strict',
+  },
+};
+const importedMeetingArchive = {
+  repositorySchemaVersion: 1,
+  exportedAt: 2,
+  scenes: [{ scene: { id: 'imported-meeting', presetSnapshot: { meetingConfig: meetingNarrativeConfig } }, archivedAt: null }],
+  snapshots: [],
+  memoryDrafts: [],
+};
+const previousMeetingArchive = {
+  repositorySchemaVersion: 1,
+  exportedAt: 1,
+  scenes: [{ scene: { id: 'previous-meeting', presetSnapshot: { meetingConfig: meetingNarrativeConfig } }, archivedAt: null }],
+  snapshots: [],
+  memoryDrafts: [],
+};
+let meetingArchive = structuredClone(emptyMeetingArchive);
 const avatarBytes = Buffer.from('avatar-contract-bytes');
 const avatarBase64 = avatarBytes.toString('base64');
 const localMediaRepositoryMock = {
@@ -127,6 +169,14 @@ const storage = loadTypeScriptModule('src/services/storage.ts', {
     flushDurableChatHistory: async () => undefined,
     readDurableChatHistory: async () => durableChatHistory,
     replaceDurableChatHistory: async history => { durableChatHistory = history; },
+  },
+  '../repositories/meetingRepository': {
+    clearMeetingRepository: async () => { meetingArchive = structuredClone(emptyMeetingArchive); },
+    exportMeetingRepositoryArchive: async () => structuredClone(meetingArchive),
+    importMeetingRepositoryArchive: async value => { meetingArchive = structuredClone(value); },
+  },
+  '../features/meeting/data/meetingRepositoryProtocol': {
+    normalizeMeetingRepositoryArchive: value => structuredClone(value),
   },
 });
 
@@ -260,6 +310,18 @@ const rootValue = {
         reactionAttempts: 0,
       },
     },
+    offlinePresets: [{
+      id: 'offline-contract',
+      name: 'Contract IRL',
+      sceneMode: 'offline',
+      sceneDescription: 'A meeting preset carried by the root backup.',
+      main: ['Grounded role-play.'],
+      jailbreak: [],
+      authorsNote: [],
+      authorsNoteDepth: 0,
+      meetingConfig: meetingNarrativeConfig,
+    }],
+    activeOfflinePresetId: 'offline-contract',
   },
   version: 2,
 };
@@ -273,7 +335,30 @@ expect('nana-root' in exported.data, 'exports must include nana-root');
 expect('nana_preferences' in exported.data, 'exports must include Nana auxiliary keys');
 expect(!('unrelated' in exported.data), 'exports must exclude unrelated storage keys');
 expect(!exportedText.includes('do-not-export'), 'exports must recursively redact API keys');
-expect(exported.version === 2, 'new exports must use the v2 envelope');
+expect(exported.version === 3, 'new exports must use the v3 envelope');
+const exportedWithMeeting = storage.createExportDocument(
+  {
+    'nana-root': {
+      state: {
+        myName: 'User',
+        offlinePresets: rootValue.state.offlinePresets,
+        activeOfflinePresetId: 'offline-contract',
+      },
+      version: 2,
+    },
+  },
+  '2026-07-12T00:00:00.000Z',
+  undefined,
+  importedMeetingArchive,
+);
+expect(exportedWithMeeting.meetingArchive.repositorySchemaVersion === 1, 'v3 exports must include the meeting repository archive');
+const parsedMeetingExport = storage.parseImportBundle(JSON.stringify(exportedWithMeeting));
+expect(parsedMeetingExport.meetingArchive.scenes[0].scene.id === 'imported-meeting', 'v3 imports must parse a non-empty meeting repository archive');
+expect(
+  exportedWithMeeting.data['nana-root'].state.offlinePresets[0].meetingConfig.narrative.layout === 'pureNovel'
+    && parsedMeetingExport.meetingArchive.scenes[0].scene.presetSnapshot.meetingConfig.narrative.enforcement === 'strict',
+  'v3 backups must carry narrative controls in both root offline presets and meeting snapshots',
+);
 
 const generatedAvatarMedia = await storage.createAvatarMediaManifest({ 'nana-root': rootValue });
 expect(generatedAvatarMedia.avatars.length === 1, 'v2 export must embed referenced Nana-managed avatars');
@@ -304,13 +389,17 @@ expect(!('avatarMedia' in inlineOnlyExport), 'inline-only web backups must not c
 expect(inlineOnlyExportText.length < 5 * 1024 * 1024, 'three legal 512 KiB inline avatars must remain below the import envelope limit');
 expect(storage.parseImportBundle(inlineOnlyExportText).entries.length === 1, 'Nana must accept its own maximum-size inline avatar export');
 
-const avatarBundle = storage.parseImportBundle(JSON.stringify(exportedWithAvatar));
+const avatarBundle = storage.parseImportBundle(JSON.stringify({
+  ...exportedWithAvatar,
+  meetingArchive: importedMeetingArchive,
+}));
 const preparedAvatarImport = storage.prepareAvatarMediaImport(avatarBundle);
 const preparedRoot = JSON.parse(preparedAvatarImport.entries.find(([key]) => key === 'nana-root')[1]);
 expect(preparedRoot.state.myAvatar.includes('/nana-media/avatars/import-'), 'avatar import must replace source-device URI with promoted local URI');
 expect(stagedAvatarUris.length >= 1 && promotedAvatarUris.length >= 1, 'avatar import must stage before promotion');
 
 asyncValues.set('nana-root', JSON.stringify({ state: { myName: 'Before import' }, version: 2 }));
+meetingArchive = structuredClone(previousMeetingArchive);
 const deletedBeforeRollback = deletedFinalAvatarUris.length;
 failNextMultiSet = true;
 await expectRejects(
@@ -320,10 +409,12 @@ await expectRejects(
 );
 expect(deletedFinalAvatarUris.length > deletedBeforeRollback, 'failed avatar imports must delete promoted final files');
 expect(JSON.parse(asyncValues.get('nana-root')).state.myName === 'Before import', 'failed avatar imports must retain the previous root state');
+expect(meetingArchive.scenes[0].scene.id === 'previous-meeting', 'failed v3 imports must restore the previous non-empty meeting archive');
 
 await storage.applyImportWithRollback(avatarBundle);
 expect(reconcileCount === 1, 'successful data restore must reconcile persisted payments once');
 expect(JSON.parse(asyncValues.get('nana-root')).state.myAvatar.includes('/nana-media/avatars/import-'), 'successful avatar import must persist rewritten local references');
+expect(meetingArchive.scenes[0].scene.id === 'imported-meeting', 'successful v3 imports must replace the meeting archive atomically');
 
 const importedEntries = storage.parseImportDocument(JSON.stringify(exportedWithAvatar));
 const importedRoot = JSON.parse(importedEntries.find(([key]) => key === 'nana-root')[1]);

@@ -135,6 +135,15 @@ expect(
     && !voiceTranscriptionFailureSource.includes("transitionOutgoingTurn("),
   'voice transcription failure must not masquerade as an outgoing transport failure',
 );
+expect(
+  voiceTranscriptionFailureSource.includes("localSpeechRejected ? 'unavailable' : 'failed'"),
+  'provider failures must remain retryable while locally detected silence stays a plain voice bubble',
+);
+expect(
+  retrySource.includes("message.voiceTranscriptionStatus === 'failed'")
+    && retrySource.includes('skipDeliverySchedule: true'),
+  'voice transcription retry must reuse the original bubble without replaying message delivery',
+);
 expect(storeSource.includes('cancelMessageDeliveryTimers(chatId);'), 'clearing a chat must cancel its pending delivery timers');
 expect(retrySource.includes('resetFailedMessageDelivery(message, retryAt)'), 'retry must reset failed messages in place');
 expect(retrySource.includes('retryMessageIds'), 'retry must replay the original message IDs');
@@ -148,6 +157,7 @@ expect(
 const bubbleSource = readFileSync(resolve(root, 'src/components/ChatMessageBubble.tsx'), 'utf8');
 expect(bubbleSource.includes('message-delivery-${msg.id}'), 'outgoing bubbles must expose a stable delivery-state test target');
 expect(bubbleSource.includes('messageRetryHint'), 'failed bubbles must expose duplicate-safe retry guidance');
+expect(bubbleSource.includes('voice-transcription-${msg.id}'), 'voice bubbles must expose transcription failure and retry state');
 const nativeRepository = readFileSync(resolve(root, 'src/repositories/chatMessageRepository.native.ts'), 'utf8');
 const webRepository = readFileSync(resolve(root, 'src/repositories/chatMessageRepository.web.ts'), 'utf8');
 expect(nativeRepository.includes('normalizeMessageDelivery(value)'), 'native history loads must normalize delivery metadata');

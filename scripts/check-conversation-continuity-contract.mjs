@@ -23,10 +23,12 @@ vm.runInContext(compiled.outputText, vm.createContext({
 
 const {
   formatConversationContinuityContext,
+  isMutuallyAgreedOfflineMeeting,
   normalizeConversationContinuityMap,
   normalizeConversationContinuityState,
   parseConversationContinuityEnvelope,
   selectConversationContinuityFollowUp,
+  transitionConversationMeetingHandoff,
   updateConversationContinuity,
 } = module.exports;
 const errors = [];
@@ -41,6 +43,13 @@ expect(parsed.text === 'I am here.<NANA_MSG>Tell me more.', 'private continuity 
 expect(parsed.patch?.emotion === 'concerned', 'valid model emotion metadata must be retained');
 expect(parsed.patch?.topics?.[0] === 'work', 'valid model topics must be retained');
 expect(parsed.patch?.openLoops?.[0]?.owner === 'character', 'valid model open loops must retain ownership');
+
+const agreedPatch = parseConversationContinuityEnvelope(
+  'See you tomorrow.<NANA_CONTINUITY>{"meetingHandoff":{"state":"agreed","title":"Tomorrow at the cafe","premise":"They agreed to meet at the cafe tomorrow afternoon."},"topics":[],"openLoops":[]}</NANA_CONTINUITY>',
+).patch;
+expect(agreedPatch?.meetingHandoff?.state === 'agreed', 'a structurally valid agreed handoff may be parsed as private metadata');
+expect(isMutuallyAgreedOfflineMeeting("Okay, I'll be there at the cafe tomorrow. See you then.", 'Yes, see you there. I will come.'), 'explicit mutual in-person agreement must pass the application-side semantic guard');
+expect(!isMutuallyAgreedOfflineMeeting('Maybe we could meet sometime?', 'That could be nice.'), 'vague or unresolved invitations must fail the semantic guard');
 
 const malformed = parseConversationContinuityEnvelope(
   'Visible reply<NANA_CONTINUITY>{"emotion":',
@@ -76,6 +85,39 @@ expect(!second.openLoops.some(loop => loop.id === firstQuestionId), 'a user answ
 expect(second.openLoops.some(loop => loop.kind === 'plan' && loop.owner === 'shared'), 'a shared future plan must remain open');
 expect(second.lastTurnId === 'turn-2', 'the latest committed turn must own the current state revision');
 
+const handoffState = updateConversationContinuity(second, {
+  characterId: 'luna-id',
+  turnId: 'turn-meeting',
+  userText: "Okay, I'll be there at the cafe tomorrow. See you then.",
+  characterText: 'Yes, see you there. I will come.',
+  modelPatch: agreedPatch,
+  sourceMessageIds: [101, 102],
+  now: now + 1_500,
+});
+expect(handoffState.meetingHandoff?.state === 'available', 'a mutually agreed offline meeting must create one available handoff');
+expect(handoffState.meetingHandoff?.sourceMessageIds.join(',') === '101,102', 'the app must attach source message ids instead of trusting model metadata');
+const dismissedHandoff = transitionConversationMeetingHandoff(handoffState, 'dismissed', { now: now + 1_600 });
+const repeatedHandoff = updateConversationContinuity(dismissedHandoff, {
+  characterId: 'luna-id',
+  turnId: 'turn-meeting',
+  userText: "Okay, I'll be there at the cafe tomorrow. See you then.",
+  characterText: 'Yes, see you there. I will come.',
+  modelPatch: agreedPatch,
+  sourceMessageIds: [101, 102],
+  now: now + 1_700,
+});
+expect(repeatedHandoff.meetingHandoff?.state === 'dismissed', 'replaying the same turn must not resurrect a dismissed handoff');
+const vagueHandoff = updateConversationContinuity(second, {
+  characterId: 'luna-id',
+  turnId: 'turn-vague',
+  userText: 'Maybe we could meet sometime?',
+  characterText: 'That could be nice.',
+  modelPatch: agreedPatch,
+  now: now + 1_800,
+});
+expect(!vagueHandoff.meetingHandoff, 'application validation must discard an agreed model patch when the visible turn is ambiguous');
+expect(normalizeConversationContinuityState(handoffState, 'luna-id', handoffState.meetingHandoff.expiresAt + 1)?.meetingHandoff === undefined, 'handoffs must expire after their bounded lifetime');
+
 let bounded = second;
 for (let index = 0; index < 8; index += 1) {
   bounded = updateConversationContinuity(bounded, {
@@ -107,7 +149,7 @@ expect(aiSource.includes("'Current Conversation Continuity'"), 'AI context must 
 expect(aiSource.includes("'Private Continuity Update'"), 'normal generation must request a private state patch in the same model call');
 expect(aiSource.includes('parseConversationContinuityEnvelope(rawText)'), 'remote replies must strip and parse private metadata before display');
 const storeSource = readFileSync(resolve(root, 'src/stores/nanaStore.ts'), 'utf8');
-expect(storeSource.includes('NANA_PERSIST_VERSION = 14'), 'voice, identity, time zone, and proactive cadence persistence require store version 14');
+expect(storeSource.includes('NANA_PERSIST_VERSION = 15'), 'meeting configuration migration requires store version 15');
 expect(storeSource.includes('normalizeConversationContinuityMap('), 'persisted continuity must be normalized during migration');
 expect(storeSource.includes('conversationContinuityByCharacter: state.conversationContinuityByCharacter'), 'continuity must be included in portable persisted state');
 expect(storeSource.match(/conversationContinuity: state\.conversationContinuityByCharacter/g)?.length >= 3, 'chat, proactive chat, and calls must receive continuity context');

@@ -1,16 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Image } from 'expo-image';
 import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react-native';
-import { ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 
 import type { StickerAsset, StickerScope } from '../types';
 import { normalizeStickerAssets } from '../services/stickerRuntime';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 import { AnimatedPressable } from './primitives';
+import { useStableViewportMetrics } from '../hooks/useStableViewportMetrics';
 import {
   StickerPackEditorOverlay,
   type StickerPackEditorLabels,
 } from './StickerPackEditorOverlay';
+
+const SMOKE_EDITOR_STICKER: StickerAsset = {
+  schemaVersion: 1,
+  id: 'smoke-editor-sticker',
+  uri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  name: 'Sample sticker',
+  tags: ['sample', 'reaction'],
+  mimeType: 'image/png',
+  animated: false,
+  scope: 'global',
+  createdAt: 1,
+};
 
 export interface StickerRelationshipOption {
   id: string;
@@ -55,8 +68,7 @@ export function StickerManagerView({
   initialCharacterId,
   labels,
 }: StickerManagerViewProps) {
-  const { width, height } = useWindowDimensions();
-  const compact = width <= 360 || height < 700;
+  const { compact } = useStableViewportMetrics();
   const copy = useMemo(() => ({
     title: labels?.title ?? '表情包',
     global: labels?.global ?? '全局表情',
@@ -76,6 +88,19 @@ export function StickerManagerView({
   );
   const [editingSticker, setEditingSticker] = useState<StickerAsset | null>(null);
   const normalizedStickers = useMemo(() => normalizeStickerAssets(stickers), [stickers]);
+
+  useEffect(() => {
+    if (process.env.EXPO_PUBLIC_NANA_SMOKE !== '1' || process.env.EXPO_OS !== 'web') return;
+    const scope = globalThis as typeof globalThis & {
+      __NANA_SMOKE_OPEN_STICKER_EDITOR__?: () => void;
+    };
+    scope.__NANA_SMOKE_OPEN_STICKER_EDITOR__ = () => {
+      setEditingSticker(SMOKE_EDITOR_STICKER);
+    };
+    return () => {
+      delete scope.__NANA_SMOKE_OPEN_STICKER_EDITOR__;
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -304,7 +329,7 @@ export function StickerManagerView({
                       autoplay={sticker.animated}
                       cachePolicy="memory-disk"
                       contentFit="contain"
-                      transition={120}
+                      transition={0}
                       style={{ width: '100%', height: '100%' }}
                     />
                   </AnimatedPressable>

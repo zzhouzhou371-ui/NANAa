@@ -2,6 +2,8 @@ import type {
   ConversationContinuityByCharacter,
   ConversationContinuityState,
   ConversationEmotion,
+  ConversationMeetingHandoff,
+  ConversationMeetingHandoffState,
   ConversationOpenLoop,
   ConversationOpenLoopKind,
   ConversationOpenLoopOwner,
@@ -12,6 +14,7 @@ const HOUR_MS = 60 * 60 * 1_000;
 const EMOTION_TTL_MS = 36 * HOUR_MS;
 const TOPIC_TTL_MS = 72 * HOUR_MS;
 const OPEN_LOOP_TTL_MS = 14 * 24 * HOUR_MS;
+export const MEETING_HANDOFF_TTL_MS = 14 * 24 * HOUR_MS;
 const MAX_TOPICS = 3;
 const MAX_OPEN_LOOPS = 4;
 
@@ -45,6 +48,11 @@ export interface ConversationContinuityPatch {
     owner: ConversationOpenLoopOwner;
     summary: string;
   }[];
+  meetingHandoff?: {
+    state: 'agreed';
+    title?: string;
+    premise: string;
+  };
 }
 
 interface UpdateConversationContinuityInput {
@@ -53,6 +61,7 @@ interface UpdateConversationContinuityInput {
   userText: string;
   characterText: string;
   modelPatch?: ConversationContinuityPatch;
+  sourceMessageIds?: number[];
   now?: number;
 }
 
@@ -117,8 +126,21 @@ const normalizePatch = (value: unknown): ConversationContinuityPatch | undefined
       return kind && owner && summary ? [{ kind, owner, summary }] : [];
     }).slice(0, MAX_OPEN_LOOPS)
     : undefined;
-  return emotion || emotionReason || topics?.length || openLoops?.length
-    ? { emotion, emotionReason, topics, openLoops }
+  const rawMeetingHandoff = isRecord(value.meetingHandoff) ? value.meetingHandoff : undefined;
+  const meetingPremise = typeof rawMeetingHandoff?.premise === 'string'
+    ? compactText(rawMeetingHandoff.premise, 600)
+    : '';
+  const meetingHandoff = rawMeetingHandoff?.state === 'agreed' && meetingPremise
+    ? {
+        state: 'agreed' as const,
+        ...(typeof rawMeetingHandoff.title === 'string' && compactText(rawMeetingHandoff.title, 80)
+          ? { title: compactText(rawMeetingHandoff.title, 80) }
+          : {}),
+        premise: meetingPremise,
+      }
+    : undefined;
+  return emotion || emotionReason || topics?.length || openLoops?.length || meetingHandoff
+    ? { emotion, emotionReason, topics, openLoops, meetingHandoff }
     : undefined;
 };
 
@@ -172,6 +194,39 @@ const normalizeOpenLoop = (value: unknown, now: number): ConversationOpenLoop | 
   } : null;
 };
 
+const handoffStates = new Set<ConversationMeetingHandoffState>(['available', 'dismissed', 'started']);
+
+const normalizeMeetingHandoff = (value: unknown, now: number): ConversationMeetingHandoff | undefined => {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.state !== 'string'
+    || !handoffStates.has(value.state as ConversationMeetingHandoffState)
+    || typeof value.premise !== 'string'
+    || typeof value.sourceTurnId !== 'string'
+    || !Array.isArray(value.sourceMessageIds)
+    || !value.sourceMessageIds.every(id => Number.isSafeInteger(id) && id >= 0)
+    || !validTimestamp(value.createdAt)
+    || !validTimestamp(value.updatedAt)
+    || !validTimestamp(value.expiresAt)
+    || value.expiresAt <= now) return undefined;
+  const premise = compactText(value.premise, 600);
+  if (!premise) return undefined;
+  return {
+    id: value.id,
+    state: value.state as ConversationMeetingHandoffState,
+    ...(typeof value.title === 'string' && compactText(value.title, 80)
+      ? { title: compactText(value.title, 80) }
+      : {}),
+    premise,
+    sourceTurnId: value.sourceTurnId,
+    sourceMessageIds: [...new Set(value.sourceMessageIds as number[])].slice(0, 24),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    expiresAt: value.expiresAt,
+    ...(typeof value.sceneId === 'string' && value.sceneId.trim() ? { sceneId: value.sceneId.trim() } : {}),
+  };
+};
+
 export const normalizeConversationContinuityState = (
   value: unknown,
   characterId: string,
@@ -199,11 +254,13 @@ export const normalizeConversationContinuityState = (
     .filter((loop): loop is ConversationOpenLoop => !!loop)
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, MAX_OPEN_LOOPS);
+  const meetingHandoff = normalizeMeetingHandoff(value.meetingHandoff, now);
   const emotionActive = value.emotionExpiresAt > now;
   const expiresAt = Math.max(
     emotionActive ? value.emotionExpiresAt : 0,
     ...topics.map(topic => topic.expiresAt),
     ...openLoops.map(loop => loop.expiresAt),
+    meetingHandoff?.expiresAt || 0,
   );
   if (expiresAt <= now) return null;
   return {
@@ -217,6 +274,7 @@ export const normalizeConversationContinuityState = (
     emotionExpiresAt: emotionActive ? value.emotionExpiresAt : now,
     topics,
     openLoops,
+    ...(meetingHandoff ? { meetingHandoff } : {}),
     ...(typeof value.lastTurnId === 'string' ? { lastTurnId: value.lastTurnId } : {}),
     updatedAt: value.updatedAt,
     expiresAt,
@@ -296,6 +354,15 @@ const localPatchForTurn = (
   };
 };
 
+export const isMutuallyAgreedOfflineMeeting = (userText: string, characterText: string) => {
+  const combined = `${userText}\n${characterText}`;
+  const hasOfflineMeeting = /(见面|碰面|线下|当面|赴约|约会|咖啡馆|餐厅|公园|车站|商场|cafe|coffee\s+shop|restaurant|park|station|meet\s+(?:you|me|up|in\s+person)|in\s+person|get\s+together)/iu.test(combined);
+  const acceptance = /(好(?:啊|呀|的)?|可以|行|没问题|当然|说定了|那就|我会去|我等你|不见不散|就这么定|(?:明天|今晚|下午|上午|周末|到时|待会).{0,16}(?:见|到|去|来)|yes|sure|okay|ok|deal|see\s+you|i(?:'ll|\s+will)\s+(?:go|come|be\s+there))/iu;
+  const userAgreed = acceptance.test(userText);
+  const characterAgreed = acceptance.test(characterText);
+  return hasOfflineMeeting && userAgreed && characterAgreed;
+};
+
 const mergeTopics = (
   current: ConversationTopic[],
   labels: string[],
@@ -361,6 +428,7 @@ export const updateConversationContinuity = (
     userText,
     characterText,
     modelPatch,
+    sourceMessageIds = [],
     now = Date.now(),
   }: UpdateConversationContinuityInput,
 ): ConversationContinuityState => {
@@ -389,10 +457,32 @@ export const updateConversationContinuity = (
     || localPatch.emotionReason
     || (emotion === normalizedCurrent?.emotion ? normalizedCurrent.emotionReason : undefined);
   const emotionExpiresAt = now + EMOTION_TTL_MS;
+  const currentHandoff = normalizedCurrent?.meetingHandoff;
+  const incomingHandoff = remotePatch?.meetingHandoff
+    && isMutuallyAgreedOfflineMeeting(userText, characterText)
+    ? remotePatch.meetingHandoff
+    : undefined;
+  const meetingHandoff: ConversationMeetingHandoff | undefined = incomingHandoff
+    ? {
+        id: `meeting-handoff:${stableHash(`${characterId}:${turnId}:${identityText(incomingHandoff.premise)}`)}`,
+        state: currentHandoff?.sourceTurnId === turnId ? currentHandoff.state : 'available',
+        ...(incomingHandoff.title ? { title: incomingHandoff.title } : {}),
+        premise: incomingHandoff.premise,
+        sourceTurnId: turnId,
+        sourceMessageIds: [...new Set(sourceMessageIds.filter(id => Number.isSafeInteger(id) && id >= 0))].slice(0, 24),
+        createdAt: currentHandoff?.sourceTurnId === turnId ? currentHandoff.createdAt : now,
+        updatedAt: now,
+        expiresAt: now + MEETING_HANDOFF_TTL_MS,
+        ...(currentHandoff?.sourceTurnId === turnId && currentHandoff.sceneId
+          ? { sceneId: currentHandoff.sceneId }
+          : {}),
+      }
+    : currentHandoff;
   const expiresAt = Math.max(
     emotionExpiresAt,
     ...topics.map(topic => topic.expiresAt),
     ...openLoops.map(loop => loop.expiresAt),
+    meetingHandoff?.expiresAt || 0,
   );
   return {
     schemaVersion: 1,
@@ -403,9 +493,33 @@ export const updateConversationContinuity = (
     emotionExpiresAt,
     topics,
     openLoops,
+    ...(meetingHandoff ? { meetingHandoff } : {}),
     lastTurnId: turnId,
     updatedAt: now,
     expiresAt,
+  };
+};
+
+export const transitionConversationMeetingHandoff = (
+  state: ConversationContinuityState | undefined,
+  nextState: Exclude<ConversationMeetingHandoffState, 'available'>,
+  options: { sceneId?: string; now?: number } = {},
+): ConversationContinuityState | undefined => {
+  if (!state?.meetingHandoff) return state;
+  const now = options.now ?? Date.now();
+  const normalized = normalizeConversationContinuityState(state, state.characterId, now);
+  if (!normalized?.meetingHandoff) return normalized ?? state;
+  const meetingHandoff: ConversationMeetingHandoff = {
+    ...normalized.meetingHandoff,
+    state: nextState,
+    updatedAt: now,
+    ...(nextState === 'started' && options.sceneId ? { sceneId: options.sceneId } : {}),
+  };
+  return {
+    ...normalized,
+    meetingHandoff,
+    updatedAt: now,
+    expiresAt: Math.max(normalized.expiresAt, meetingHandoff.expiresAt),
   };
 };
 
@@ -448,6 +562,9 @@ export const CONTINUITY_ENVELOPE_INSTRUCTION = [
   'Allowed emotion values: neutral, warm, playful, concerned, tense, tender, reflective.',
   'topics must contain at most three short current-turn topics.',
   'openLoops must contain at most three objects with kind question|promise|plan|concern, owner user|character|shared, and a short summary.',
+  'meetingHandoff is optional. Include it only when both the user and character explicitly agree in this conversation to meet offline/in person, with state exactly "agreed" and a concrete premise.',
+  'Only when eligible, add: "meetingHandoff":{"state":"agreed","title":"optional","premise":"the mutually agreed offline meeting"}.',
+  'Do not include meetingHandoff for a vague wish, a future possibility, a one-sided invitation, an unresolved question, or an online activity. Omit the property entirely in those cases.',
   'Include only state explicitly supported by this turn. Use empty arrays when there is nothing to add.',
   'The block is private metadata and must appear after, never inside, the visible message bubbles.',
 ].join('\n');

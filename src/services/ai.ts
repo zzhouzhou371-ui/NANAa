@@ -116,6 +116,51 @@ async function postOpenAICompatible(params: {
   return data.choices?.[0]?.message?.content || '';
 }
 
+export interface GenerateStructuredTextParams {
+  apiUrl: string;
+  apiKey: string;
+  selectedModel: string;
+  systemPrompt: string;
+  context: string;
+  temperature?: number;
+  maxOutputCharacters?: number;
+  signal?: AbortSignal;
+}
+
+/** Shared non-streaming completion path for structured relationship features. */
+export async function generateStructuredText(
+  params: GenerateStructuredTextParams,
+): Promise<string> {
+  if (!params.apiKey.trim()) throw new Error('An API key is required for remote generation.');
+  const baseUrl = normalizeBaseUrl(params.apiUrl);
+  const model = params.selectedModel || 'gemini-2.5-flash';
+  const temperature = Math.max(0, Math.min(1.5, params.temperature ?? 0.72));
+  const rawText = isOfficialGeminiBaseUrl(baseUrl)
+    ? await postGeminiText({
+        baseUrl,
+        model,
+        apiKey: params.apiKey,
+        text: `${params.systemPrompt}\n\n${params.context}`,
+        temperature,
+        timeoutMs: 60_000,
+        signal: params.signal,
+      })
+    : await postOpenAICompatible({
+        baseUrl,
+        model,
+        apiKey: params.apiKey,
+        messages: [
+          { role: 'system', content: params.systemPrompt },
+          { role: 'user', content: params.context },
+        ],
+        temperature,
+        timeoutMs: 60_000,
+        signal: params.signal,
+      });
+  const maxCharacters = Math.max(1_000, Math.min(48_000, params.maxOutputCharacters || 12_000));
+  return Array.from(rawText.trim()).slice(0, maxCharacters).join('');
+}
+
 export async function fetchModelList(apiUrl: string, apiKey: string): Promise<string[]> {
   if (!apiUrl || !apiKey) return [];
 

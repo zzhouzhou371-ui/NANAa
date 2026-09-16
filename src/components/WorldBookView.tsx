@@ -7,6 +7,10 @@ import type { WorldBookEntry } from '../types';
 import { AnimatedPressable } from './primitives';
 import { CharacterPortrait } from './CharacterPortrait';
 import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
+import { RelationshipMemoryArchive } from './RelationshipMemoryArchive';
+import { toggleRelationshipMemoryRecall } from '../features/memory/relationship-memory-archive-model';
+import type { TranslationDict } from '../i18n';
+import { suppressMemoryEvidenceForTrace } from '../utils/memory';
 
 export { MemoryEditor };
 
@@ -74,6 +78,7 @@ export function WorldBookView() {
   const editAlwaysActive = useNanaStore(s => s.editAlwaysActive);
   const characters = useNanaStore(s => s.characters);
   const friends = useNanaStore(s => s.friends);
+  const language = useNanaStore(s => s.themeConfig.language === 'zh' ? 'zh' : 'en');
   const set = useNanaStore.setState;
   const [showBindingPicker, setShowBindingPicker] = useState(false);
 
@@ -93,16 +98,6 @@ export function WorldBookView() {
   const showCharDetail = worldBookView === 'chardetail' && worldBookCharId;
   const showEdit = worldBookView === 'edit';
   const friendChars = characters.filter(c => friends.includes(c.id));
-  const traceLabels: Record<string, string> = {
-    chat: t.traceChat,
-    voiceMessage: t.traceVoiceMessage,
-    photo: t.tracePhoto,
-    payment: t.tracePayment,
-    voiceCall: t.traceVoiceCall,
-    videoCall: t.traceVideoCall,
-    moment: t.traceMoment,
-  };
-
   const createMemoryEntry = (charId: string) => {
     const char = characters.find(c => c.id === charId);
     const existing = worldBookEntries.find(e => e.characterId === charId && e.group === 'memory');
@@ -288,10 +283,6 @@ export function WorldBookView() {
     const charEntries = worldBookEntries.filter(e => e.characterId === worldBookCharId);
     const memoryEntries = charEntries.filter(e => e.group === 'memory');
     const otherEntries = charEntries.filter(e => e.group !== 'memory');
-    const charTraces = relationshipTraces
-      .filter(trace => trace.characterId === worldBookCharId)
-      .sort((left, right) => right.occurredAt - left.occurredAt);
-
     return (
       <View className="flex-1">
         <ScrollView
@@ -301,55 +292,29 @@ export function WorldBookView() {
           contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 40 }}
         >
           <Text style={{ color: neumorphicPalette.onDarkPrimary, fontSize: 13, fontWeight: '800', marginBottom: 10, paddingHorizontal: 3 }}>{t.sharedMemories}</Text>
-          {charTraces.length > 0 ? (
-            <View style={{ gap: 12, marginBottom: 22 }}>
-              {charTraces.slice(0, 8).map(trace => (
-                <AnimatedPressable
-                  key={trace.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${trace.title}. ${trace.summary}`}
-                  accessibilityHint={trace.remember ? 'Ignore this relationship memory' : 'Remember this relationship memory'}
-                  onPress={() => set(state => ({
-                    relationshipTraces: state.relationshipTraces.map(item => item.id === trace.id
-                      ? {
-                          ...item,
-                          remember: !item.remember,
-                          state: item.remember ? 'ignored' : 'digested',
-                          revision: item.revision + 1,
-                        }
-                      : item),
-                  }))}
-                  style={{
-                    minHeight: 68,
-                    borderRadius: 14,
-                    paddingHorizontal: 13,
-                    paddingVertical: 11,
-                    backgroundColor: trace.remember ? neumorphicPalette.pinkGold : neumorphicPalette.lavender,
-                    boxShadow: trace.remember
-                      ? '-3px -3px 6px rgba(255,248,255,0.42), 3px 4px 6px rgba(54,43,67,0.20)'
-                      : 'inset 3px 3px 7px rgba(54,43,67,0.24), inset -3px -3px 7px rgba(255,248,255,0.30)',
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <Text style={{ color: neumorphicPalette.onLightPrimary, fontSize: 10, fontWeight: '800' }}>{traceLabels[trace.source] || trace.source}</Text>
-                    <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 10 }}>
-                      {new Date(trace.occurredAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                  </View>
-                  <Text numberOfLines={2} style={{ color: neumorphicPalette.onLightPrimary, fontSize: 12, lineHeight: 17, marginTop: 5 }}>
-                    {trace.summary}
-                  </Text>
-                  <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 10, fontWeight: trace.remember ? '800' : '600', marginTop: 5 }}>
-                    {trace.remember ? t.rememberedTapIgnore : t.ignoredTapRemember}
-                  </Text>
-                </AnimatedPressable>
-              ))}
-            </View>
-          ) : (
-            <View style={{ borderRadius: 16, padding: 14, marginBottom: 18, backgroundColor: neumorphicPalette.lavender, boxShadow: 'inset 3px 3px 7px rgba(54,43,67,0.24), inset -3px -3px 7px rgba(255,248,255,0.30)' }}>
-              <Text style={{ color: neumorphicPalette.onLightSecondary, fontSize: 12 }}>{t.sharedMemoryEmpty}</Text>
-            </View>
-          )}
+          <RelationshipMemoryArchive
+            characterId={worldBookCharId}
+            characterName={char?.name || t.memory}
+            traces={relationshipTraces}
+            locale={language}
+            t={t as TranslationDict}
+            onCorrect={(traceId, summary) => (
+              useNanaStore.getState().correctRelationshipMemory(traceId, summary)
+            )}
+            onToggleRemember={(trace) => set(state => {
+              const sourceTrace = state.relationshipTraces.find(item => item.id === trace.id);
+              if (!sourceTrace) return {};
+              const nextTrace = toggleRelationshipMemoryRecall(sourceTrace);
+              return {
+                relationshipTraces: state.relationshipTraces.map(item => (
+                  item.id === sourceTrace.id ? nextTrace : item
+                )),
+                worldBookEntries: nextTrace.remember
+                  ? state.worldBookEntries
+                  : suppressMemoryEvidenceForTrace(state.worldBookEntries, sourceTrace),
+              };
+            })}
+          />
 
           <Text style={{ color: neumorphicPalette.onDarkPrimary, fontSize: 14, fontWeight: '800', marginBottom: 9, paddingHorizontal: 3 }}>{t.memory}</Text>
           {memoryEntries.length > 0 ? (() => {

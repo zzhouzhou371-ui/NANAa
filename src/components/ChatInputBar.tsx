@@ -7,6 +7,12 @@ import { resolveVoiceProvider } from '../services/voiceProviderRuntime';
 import { useNativeVoiceCapture } from '../services/nativeAudioRuntime';
 import { deletePersistedMediaFile } from '../services/localMediaRepository';
 import type { MediaCaptureResult } from '../services/mediaRuntime';
+import {
+  projectVoiceGesturePageX,
+  resolveVoiceGestureTarget,
+  resolveVoiceGestureTrackPosition,
+  type VoiceGestureTarget,
+} from '../services/voiceGestureRuntime';
 import { useNanaStore } from '../stores/nanaStore';
 import { triggerHaptic } from '../utils/haptics';
 import { EmojiPanel } from './EmojiPanel';
@@ -14,7 +20,11 @@ import { NeumorphicSurface, neumorphicPalette } from './neumorphic-surface';
 import { PlusMenuPanel } from './PlusMenuPanel';
 import { AnimatedPressable } from './primitives';
 import { canCommitVoiceCapture, isMeasuredVoiceDurationSendable } from './voiceCaptureGuard';
-import { hideVoiceGestureVisual, updateVoiceGestureVisual } from './voice-gesture-overlay';
+import {
+  hideVoiceGestureVisual,
+  updateVoiceGesturePosition,
+  updateVoiceGestureVisual,
+} from './voice-gesture-overlay';
 import { setDynamicIslandRecordingState } from './system/DynamicIsland';
 
 export type VoiceGesturePhase =
@@ -31,9 +41,6 @@ export type VoiceGesturePhase =
 
 export const VOICE_MIN_DURATION_MS = 1000;
 export const VOICE_MAX_DURATION_MS = 60_000;
-export const VOICE_CANCEL_THRESHOLD = -64;
-export const VOICE_CANCEL_RECOVERY_THRESHOLD = -40;
-export const VOICE_TRANSCRIBE_X_RATIO = 0.62;
 
 const PANEL_MAX_HEIGHT = 220;
 const PANEL_MIN_HEIGHT = 196;
@@ -69,7 +76,7 @@ export function ChatInputBar() {
   const isBlocked = activeChatId ? blockedUsers.includes(activeChatId) : false;
   const voiceMode = chatPanel === 'voice';
   const inputRef = useRef<TextInput>(null);
-  const gestureStartYRef = useRef(0);
+  const gestureStartXRef = useRef(0);
   const gestureStartedAtRef = useRef(0);
   const startPromiseRef = useRef<Promise<MediaCaptureResult> | null>(null);
   const releaseIntentRef = useRef<'none' | 'send' | 'cancel' | 'transcribe'>('none');
@@ -186,6 +193,21 @@ export function ChatInputBar() {
     const transcript = transcriptCapture.phase === 'ready'
       ? transcriptCapture.transcript?.trim()
       : '';
+    if (
+      transcriptCapture.errorCode === 'noSpeechDetected'
+      || transcriptCapture.errorCode === 'audioTooShort'
+    ) {
+      discardNativeVoiceCapture(capture);
+      resetNativeVoiceCapture();
+      clearRetryableTranscription(true);
+      clearVoiceGesture();
+      triggerHaptic('light');
+      showVoiceError(
+        transcriptCapture.errorMessage
+        || (transcriptCapture.errorCode === 'audioTooShort' ? t.recordingTooShort : t.voiceInputPending),
+      );
+      return;
+    }
     if (!transcript) {
       const retainedCapture = finalizeNativeVoiceCapture(capture);
       resetNativeVoiceCapture();
@@ -215,6 +237,7 @@ export function ChatInputBar() {
     set,
     showVoiceError,
     t.retryMessage,
+    t.recordingTooShort,
     t.voiceInputPending,
   ]);
 
@@ -300,10 +323,10 @@ export function ChatInputBar() {
     t.voiceInputPending,
   ]);
 
-  const handleVoicePressIn = useCallback((pageY = 0) => {
+  const handleVoicePressIn = useCallback((pageX = screenWidth / 2) => {
     if (isBlocked || finalizingRef.current) return;
     clearRetryableTranscription(true);
-    gestureStartYRef.current = pageY;
+    gestureStartXRef.current = pageX;
     gestureStartedAtRef.current = Date.now();
     gestureActiveRef.current = true;
     cancelArmedRef.current = false;
@@ -314,6 +337,7 @@ export function ChatInputBar() {
     gestureTokenRef.current = gestureToken;
     interruptedRef.current = false;
     releaseIntentRef.current = 'none';
+    updateVoiceGesturePosition(1);
     setVoicePhase('starting');
     triggerHaptic('medium');
 
@@ -365,32 +389,41 @@ export function ChatInputBar() {
     finishGesture,
     isBlocked,
     isNativeVoiceAvailable,
+    screenWidth,
     showVoiceError,
     startNativeVoiceCapture,
     t.microphoneUnavailable,
     t.voiceInputPending,
   ]);
 
-  const handleVoiceMove = useCallback((pageY = 0, pageX = screenWidth / 2) => {
+  const handleVoiceMove = useCallback((pageX = screenWidth / 2) => {
     if (!gestureActiveRef.current || finalizingRef.current) return;
-    const deltaY = pageY - gestureStartYRef.current;
-    if (deltaY <= VOICE_CANCEL_THRESHOLD) {
-      const transcribeArmed = pageX >= screenWidth * VOICE_TRANSCRIBE_X_RATIO;
-      if (transcribeArmed) {
-        transcribeArmedRef.current = true;
-        cancelArmedRef.current = false;
-      } else {
-        cancelArmedRef.current = true;
-        transcribeArmedRef.current = false;
-      }
-      setVoicePhase(transcribeArmed ? 'transcribeArmed' : 'cancelArmed');
-      return;
-    }
-    if (deltaY >= VOICE_CANCEL_RECOVERY_THRESHOLD) {
-      cancelArmedRef.current = false;
-      transcribeArmedRef.current = false;
-      setVoicePhase(current => current === 'cancelArmed' || current === 'transcribeArmed' ? 'recording' : current);
-    }
+    const projectedPageX = projectVoiceGesturePageX({
+      startPageX: gestureStartXRef.current,
+      currentPageX: pageX,
+      viewportWidth: screenWidth,
+    });
+    const currentTarget: VoiceGestureTarget = transcribeArmedRef.current
+      ? 'transcribe'
+      : cancelArmedRef.current
+        ? 'cancel'
+        : 'send';
+    const target = resolveVoiceGestureTarget({
+      currentTarget,
+      pageX: projectedPageX,
+      viewportWidth: screenWidth,
+    });
+    cancelArmedRef.current = target === 'cancel';
+    transcribeArmedRef.current = target === 'transcribe';
+    updateVoiceGesturePosition(resolveVoiceGestureTrackPosition(projectedPageX, screenWidth));
+    const nextPhase: VoiceGesturePhase = target === 'cancel'
+      ? 'cancelArmed'
+      : target === 'transcribe'
+        ? 'transcribeArmed'
+        : captureStartedRef.current
+          ? 'recording'
+          : 'starting';
+    setVoicePhase(current => current === nextPhase ? current : nextPhase);
   }, [screenWidth]);
 
   const handleVoicePressOut = useCallback(() => {
@@ -642,20 +675,20 @@ export function ChatInputBar() {
               collapsable={false}
               accessibilityRole="button"
               accessibilityLabel={retryableTranscription ? `${t.retryMessage}, ${t.convertToText}` : recordingActive ? t.releaseToSend : t.holdToTalk}
-              accessibilityHint={t.slideUpToCancel}
+              accessibilityHint={`${t.cancel} · ${t.send} · ${t.convertToText}`}
               disabled={voicePhase === 'finishing' || voicePhase === 'converting'}
-              pressRetentionOffset={{ top: 104, right: 44, bottom: 72, left: 44 }}
+              pressRetentionOffset={{ top: 44, right: screenWidth, bottom: 72, left: screenWidth }}
               onPress={retryableTranscription ? retryTranscription : undefined}
-              onPressIn={retryableTranscription ? undefined : event => handleVoicePressIn(event.nativeEvent.pageY)}
+              onPressIn={retryableTranscription ? undefined : event => handleVoicePressIn(event.nativeEvent.pageX)}
               onPressOut={retryableTranscription ? undefined : handleVoicePressOut}
-              onTouchMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
+              onTouchMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageX)}
               onPointerDown={event => {
                 if (Platform.OS !== 'web') return;
                 const target = event.currentTarget as unknown as { setPointerCapture?: (pointerId: number) => void };
                 const pointerId = (event.nativeEvent as { pointerId?: number }).pointerId;
                 if (pointerId !== undefined) target.setPointerCapture?.(pointerId);
               }}
-              onPointerMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageY, event.nativeEvent.pageX)}
+              onPointerMove={retryableTranscription ? undefined : event => handleVoiceMove(event.nativeEvent.pageX)}
               style={({ pressed }) => ({
                 position: 'absolute',
                 top: 0,

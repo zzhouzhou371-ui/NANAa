@@ -8,6 +8,12 @@ const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, '..');
 const sourcePath = resolve(root, 'src/services/mediaRuntime.ts');
 const source = readFileSync(sourcePath, 'utf8');
+const speakableTextRuntime = loadTypeScriptModule(
+  resolve(root, 'src/services/speakableText.ts'),
+);
+const voiceTranscriptionGuardRuntime = loadTypeScriptModule(
+  resolve(root, 'src/services/voiceTranscriptionGuard.ts'),
+);
 
 const compiled = ts.transpileModule(source, {
   compilerOptions: {
@@ -22,7 +28,9 @@ const module = { exports: {} };
 const context = vm.createContext({
   exports: module.exports,
   module,
-  require,
+  require: specifier => (
+    specifier === './speakableText' ? speakableTextRuntime : require(specifier)
+  ),
   console,
   Date,
   Math,
@@ -36,6 +44,45 @@ const errors = [];
 function expect(condition, message) {
   if (!condition) errors.push(message);
 }
+
+const shortVoiceDecision = voiceTranscriptionGuardRuntime.evaluateLocalVoiceTranscription({
+  phase: 'processing',
+  localUri: 'file:///voice-short.m4a',
+  durationMillis: 999,
+  meteringSamplesDb: [-32, -30],
+});
+expect(!shortVoiceDecision.allowed && shortVoiceDecision.rejection === 'audioTooShort', 'local STT must reject sub-second voice messages before upload');
+
+const silentVoiceDecision = voiceTranscriptionGuardRuntime.evaluateLocalVoiceTranscription({
+  phase: 'processing',
+  localUri: 'file:///voice-silent.m4a',
+  durationMillis: 2400,
+  meteringSamplesDb: [-82, -79, -76, -81, -74],
+});
+expect(!silentVoiceDecision.allowed && silentVoiceDecision.rejection === 'noSpeechDetected', 'metered silence must be rejected before STT');
+
+const nearSilentVoiceDecision = voiceTranscriptionGuardRuntime.evaluateLocalVoiceTranscription({
+  phase: 'processing',
+  localUri: 'file:///voice-near-silent.m4a',
+  durationMillis: 2400,
+  meteringSamplesDb: [-60, -49, -47, -46],
+});
+expect(!nearSilentVoiceDecision.allowed && nearSilentVoiceDecision.rejection === 'noSpeechDetected', 'near-silent room energy must not count as speech');
+
+const voicedDecision = voiceTranscriptionGuardRuntime.evaluateLocalVoiceTranscription({
+  phase: 'processing',
+  localUri: 'file:///voice-spoken.m4a',
+  durationMillis: 2400,
+  meteringSamplesDb: [-68, -37, -34, -52],
+});
+expect(voicedDecision.allowed && voicedDecision.voicedSampleCount === 2, 'two measured speech-energy samples must permit STT');
+
+const legacyVoiceDecision = voiceTranscriptionGuardRuntime.evaluateLocalVoiceTranscription({
+  phase: 'processing',
+  localUri: 'file:///voice-legacy.m4a',
+  durationMillis: 2400,
+});
+expect(legacyVoiceDecision.allowed, 'legacy recordings without metering evidence must retain duration-only compatibility');
 
 function loadTypeScriptModule(filePath, mocks = {}) {
   const moduleSource = readFileSync(filePath, 'utf8');
@@ -262,6 +309,35 @@ if (typeof mediaRuntime.createSpeechSynthesisPlan === 'function') {
     language: 'en-US',
   });
   expect(blank.phase === 'failed', 'TTS plan should fail for blank text');
+
+  const sanitized = mediaRuntime.createSpeechSynthesisPlan({
+    character: luna,
+    text: '[Sticker: wave] Good 1️⃣ night 😊',
+    language: 'en-US',
+  });
+  expect(sanitized.phase === 'ready', 'TTS plan should keep ordinary spoken text');
+  expect(sanitized.text === 'Good night', 'device TTS must remove sticker markers and emoji');
+
+  const symbolOnly = mediaRuntime.createSpeechSynthesisPlan({
+    character: luna,
+    text: '[Sticker: wave] 😊 !!!',
+    language: 'en-US',
+  });
+  expect(symbolOnly.phase === 'failed', 'device TTS must reject sticker- and symbol-only text');
+
+  const displayDraft = mediaRuntime.createCharacterVoiceReplyDraft(
+    luna,
+    'Good night 😊',
+    'voice',
+  );
+  expect(
+    displayDraft?.transcript === 'Good night 😊',
+    'voice bubble transcript must preserve the original display text',
+  );
+  expect(
+    mediaRuntime.createCharacterVoiceReplyDraft(luna, '[Sticker: wave] 😊', 'voice') === null,
+    'a sticker-only reply must stay out of a voice bubble',
+  );
 }
 
 if (typeof mediaRuntime.createCameraCaptureResultFromPicture === 'function') {
@@ -375,7 +451,10 @@ const nativeAudio = loadTypeScriptModule(nativeAudioPath, {
   'expo-audio': {
     getRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true, status: 'denied' }),
     requestRecordingPermissionsAsync: async () => ({ granted: false, canAskAgain: true, status: 'denied' }),
-    RecordingPresets: { LOW_QUALITY: {} },
+    RecordingPresets: {
+      LOW_QUALITY: { preset: 'low' },
+      HIGH_QUALITY: { preset: 'high' },
+    },
     setAudioModeAsync: async () => undefined,
     useAudioRecorder: () => ({}),
     useAudioRecorderState: () => ({ isRecording: false, durationMillis: 0 }),
@@ -399,6 +478,11 @@ const nativeAudio = loadTypeScriptModule(nativeAudioPath, {
 expect(typeof nativeAudio.finalizeVoiceCapture === 'function', 'native audio must export the voice commit point');
 expect(typeof nativeAudio.discardVoiceCapture === 'function', 'native audio must export cache discard');
 expect(typeof nativeAudio.openNativePermissionSettings === 'function', 'native audio must expose system settings navigation');
+const nativeAudioSource = readFileSync(nativeAudioPath, 'utf8');
+expect(nativeAudioSource.includes('RecordingPresets.HIGH_QUALITY'), 'voice recording must use the cross-provider M4A/AAC preset');
+expect(!nativeAudioSource.includes('...RecordingPresets.LOW_QUALITY'), 'voice recording must not use Android 3GP/AMR');
+expect(nativeAudioSource.includes('voiceMeteringSamplesRef'), 'native voice capture must retain local metering evidence until transcription');
+expect(nativeAudioSource.includes('meteringSamplesDb: [...voiceMeteringSamplesRef.current]'), 'finished native captures must carry their measured energy samples');
 
 const cachedVoice = {
   phase: 'processing',

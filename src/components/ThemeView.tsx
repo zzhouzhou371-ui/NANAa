@@ -166,7 +166,8 @@ function WallpaperChoice({
           <ExpoImage
             source={source}
             contentFit="contain"
-            transition={140}
+            cachePolicy="memory-disk"
+            transition={0}
             style={{ width: '100%', height: '100%' }}
           />
           {selected ? <SelectedBadge /> : null}
@@ -230,7 +231,8 @@ function IconPackChoice({
           <ExpoImage
             source={source}
             contentFit="contain"
-            transition={140}
+            cachePolicy="memory-disk"
+            transition={0}
             style={{ width: '100%', height: '100%' }}
           />
           {selected ? <SelectedBadge /> : null}

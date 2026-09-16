@@ -1,4 +1,5 @@
 import type { Preset, ThemeConfig } from '../types';
+import { DEFAULT_MEETING_CONFIG } from '../features/meeting/domain/meeting-config';
 
 export const DEFAULT_MOMENT_IMAGES = [
   'https://images.unsplash.com/photo-1707343843437-caacff5cfa74?q=80&w=600',
@@ -51,6 +52,7 @@ export const DEFAULT_OFFLINE_PRESET: Preset = {
   jailbreak: [],
   authorsNote: [],
   authorsNoteDepth: 0,
+  meetingConfig: DEFAULT_MEETING_CONFIG,
 };
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {

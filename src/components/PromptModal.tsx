@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Platform, View, Text, TextInput, useWindowDimensions } from 'react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
 import { AnimatedPressable, GradientButton } from './primitives';
@@ -31,7 +31,11 @@ function PromptModalContent({
   };
 
   return (
-    <View className="absolute inset-0 z-50 justify-center items-center px-6" style={{ backgroundColor: 'rgba(17,24,45,0.52)' }}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      className="absolute inset-0 z-50 justify-center items-center px-6"
+      style={{ backgroundColor: 'rgba(17,24,45,0.52)' }}
+    >
         <View style={{ width: cardWidth, backgroundColor: palette.surface, borderRadius: 22, padding: 22, borderWidth: 0.75, borderColor: 'rgba(255,255,255,0.52)' }}>
           <Text style={{ color: palette.ink, fontSize: 18, fontWeight: '800', marginBottom: 16, textAlign: 'center' }}>{promptModal.title}</Text>
 
@@ -67,7 +71,7 @@ function PromptModalContent({
             </GradientButton>
           </View>
         </View>
-      </View>
+    </KeyboardAvoidingView>
   );
 }
 

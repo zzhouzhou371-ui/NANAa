@@ -3,6 +3,12 @@
     "name": "Nana",
     "slug": "nana-rn",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f1085548-c7bf-4178-b64d-ae79eee9630a"
+    },
     "orientation": "portrait",
     "icon": "./assets/generated/nana-app-icons-v3/theme-bright.png",
     "scheme": "nanarn",

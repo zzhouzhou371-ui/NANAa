@@ -4,6 +4,7 @@ import { MotiView } from 'moti';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTime } from '../../hooks/useTime';
 import { useDynamicIslandExpanded, useReduceMotionEnabled } from './DynamicIsland';
+import { PHONE_STATUS_BAR_HEIGHT } from './phone-shell-layout';
 
 const STATUS_INK = 'rgba(246, 234, 230, 0.78)';
 
@@ -12,17 +13,16 @@ export function PhoneStatusBar() {
   const insets = useSafeAreaInsets();
   const islandExpanded = useDynamicIslandExpanded();
   const reducedMotion = useReduceMotionEnabled();
-  const revealDelay = reducedMotion || islandExpanded ? 0 : 180;
+  const revealDelay = reducedMotion || islandExpanded ? 0 : 60;
 
   return (
     <MotiView
       animate={{
-        opacity: islandExpanded ? 0 : 1,
-        translateY: islandExpanded ? -3 : 0,
+        translateY: islandExpanded ? -(insets.top + 38) : 0,
       }}
       transition={{
         type: 'timing',
-        duration: reducedMotion ? 80 : islandExpanded ? 90 : 120,
+        duration: reducedMotion ? 0 : 160,
         delay: revealDelay,
       }}
       style={{
@@ -33,7 +33,7 @@ export function PhoneStatusBar() {
         zIndex: 60,
         paddingTop: insets.top,
         paddingHorizontal: 30,
-        height: insets.top + 38,
+        height: insets.top + PHONE_STATUS_BAR_HEIGHT,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',

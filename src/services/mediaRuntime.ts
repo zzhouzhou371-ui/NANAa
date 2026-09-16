@@ -5,6 +5,7 @@ import type {
   MessageType,
   ReplyMode,
 } from '../types';
+import { toSpeakableText } from './speakableText';
 
 export type MediaRuntimeStatus = 'mock' | 'native' | 'unavailable';
 export type MediaPermissionKind = 'microphone' | 'camera' | 'mediaLibrary';
@@ -72,6 +73,8 @@ export interface MediaCaptureResult {
   localUri?: string;
   durationMillis?: number;
   durationSec?: number;
+  /** Transient native recorder energy samples in dBFS; omitted for legacy/unmetered captures. */
+  meteringSamplesDb?: number[];
   width?: number;
   height?: number;
   errorMessage?: string;
@@ -220,6 +223,7 @@ export const completeVoiceCaptureSession = (
 export const createVoiceCaptureResultFromRecording = (recording: {
   uri?: string | null;
   durationMillis?: number | null;
+  meteringSamplesDb?: number[];
 }): MediaCaptureResult => {
   if (!recording.uri) {
     return {
@@ -234,6 +238,9 @@ export const createVoiceCaptureResultFromRecording = (recording: {
     localUri: recording.uri,
     durationMillis: Math.max(0, recording.durationMillis || 0),
     durationSec: Math.max(1, Math.ceil((recording.durationMillis || 0) / 1000)),
+    meteringSamplesDb: recording.meteringSamplesDb
+      ? [...recording.meteringSamplesDb]
+      : undefined,
   };
 };
 
@@ -341,14 +348,14 @@ export const createSpeechSynthesisPlan = ({
   language: string;
   provider?: SpeechSynthesisProvider;
 }): SpeechSynthesisPlan => {
-  const normalizedText = text.trim();
+  const normalizedText = toSpeakableText(text);
   if (!normalizedText) {
     return {
       phase: 'failed',
       provider,
       text: '',
       language,
-      errorMessage: 'No text to synthesize',
+      errorMessage: 'No speakable text to synthesize',
     };
   }
 
@@ -462,7 +469,7 @@ export const createCharacterVoiceReplyDraft = (
   replyText: string,
   replyMode: ReplyMode,
 ): VoiceMessageDraft | null => {
-  if (!replyText.trim()) return null;
+  if (!toSpeakableText(replyText)) return null;
   if (resolveCharacterReplyType(character, replyMode, 'voice') !== 'voice') return null;
   return createVoiceMessageDraft(replyText, replyMode);
 };

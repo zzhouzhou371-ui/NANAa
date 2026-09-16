@@ -250,8 +250,8 @@ expect(
   'home icons must remain fully mounted behind the active app instead of fading in on exit',
 );
 expect(
-  homeSource.includes('duration: reduceMotionEnabled ? 100 : 220'),
-  'the foreground app layer must use a bounded 220ms state transition',
+  homeSource.includes('duration: reduceMotionEnabled ? 0 : 180'),
+  'the foreground app layer must use the current bounded 180ms state transition',
 );
 const characterSource = readFileSync(resolve(root, 'src/components/CharacterView.tsx'), 'utf8');
 expect(

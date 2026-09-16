@@ -48,7 +48,7 @@ export interface NativeVoiceCaptureController {
 
 const idleCapture: MediaCaptureResult = { phase: 'idle' };
 const voiceRecordingOptions = {
-  ...RecordingPresets.LOW_QUALITY,
+  ...RecordingPresets.HIGH_QUALITY,
   isMeteringEnabled: true,
 };
 
@@ -112,6 +112,8 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
   const disposedRef = useRef(false);
   const finishPromiseRef = useRef<Promise<MediaCaptureResult> | null>(null);
   const cancelPromiseRef = useRef<Promise<MediaCaptureResult> | null>(null);
+  const voiceMeteringSamplesRef = useRef<number[]>([]);
+  const lastVoiceMeteringDurationRef = useRef(-1);
   recorderRef.current = recorder;
   recorderStateRef.current = recorderState;
   captureRef.current = capture;
@@ -134,6 +136,25 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
     if (disposedRef.current) return;
     setCapture(nextCapture);
   }, []);
+
+  const recordVoiceMeteringSample = useCallback((metering: number | undefined, durationMillis: number) => {
+    if (!Number.isFinite(metering) || durationMillis <= lastVoiceMeteringDurationRef.current) return;
+    lastVoiceMeteringDurationRef.current = durationMillis;
+    voiceMeteringSamplesRef.current = [
+      ...voiceMeteringSamplesRef.current,
+      Math.max(-160, Math.min(0, metering!)),
+    ].slice(-240);
+  }, []);
+
+  useEffect(() => {
+    if (!recorderState.isRecording) return;
+    recordVoiceMeteringSample(recorderState.metering, Math.max(0, recorderState.durationMillis));
+  }, [
+    recorderState.durationMillis,
+    recorderState.isRecording,
+    recorderState.metering,
+    recordVoiceMeteringSample,
+  ]);
 
   const permissionGate = useMemo(
     () => createPermissionGate('voiceMessage', { microphone: microphonePermission }),
@@ -208,6 +229,8 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
         await restoreAudioSessionAfterNativeVoiceCapture().catch(() => undefined);
         return idleCapture;
       }
+      voiceMeteringSamplesRef.current = [];
+      lastVoiceMeteringDurationRef.current = -1;
       recorder.record();
 
       if (wasCancelled()) {
@@ -280,12 +303,17 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
       }
 
       try {
+        recordVoiceMeteringSample(
+          activeRecorderState.metering,
+          Math.max(0, activeRecorderState.durationMillis),
+        );
         await activeRecorder.stop();
         if (disposedRef.current || operationVersionRef.current !== finishingVersion) return idleCapture;
         const status = activeRecorder.getStatus();
         const stopped = createVoiceCaptureResultFromRecording({
           uri: activeRecorder.uri || status.url,
           durationMillis: status.durationMillis || activeRecorderState.durationMillis || Math.round(activeRecorder.currentTime * 1000),
+          meteringSamplesDb: [...voiceMeteringSamplesRef.current],
         });
         if (operationVersionRef.current !== finishingVersion) {
           discardVoiceCapture(stopped);
@@ -310,7 +338,7 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
       if (finishPromiseRef.current === task) finishPromiseRef.current = null;
     });
     return task;
-  }, [commitCapture, isNativeAvailable]);
+  }, [commitCapture, isNativeAvailable, recordVoiceMeteringSample]);
 
   const cancel = useCallback(() => {
     if (disposedRef.current) return Promise.resolve(idleCapture);
@@ -345,6 +373,8 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
       }
 
       for (const uri of temporaryUris) discardTemporaryMediaFile(uri);
+      voiceMeteringSamplesRef.current = [];
+      lastVoiceMeteringDurationRef.current = -1;
       if (!disposedRef.current) {
         commitCapture(idleCapture);
         setErrorMessage(undefined);
@@ -376,6 +406,8 @@ export function useNativeVoiceCapture(): NativeVoiceCaptureController {
 
   const reset = useCallback(() => {
     if (disposedRef.current) return;
+    voiceMeteringSamplesRef.current = [];
+    lastVoiceMeteringDurationRef.current = -1;
     commitCapture(idleCapture);
     setErrorMessage(undefined);
   }, [commitCapture]);

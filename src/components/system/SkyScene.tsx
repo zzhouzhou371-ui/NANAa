@@ -172,7 +172,7 @@ export function SkyScene({ active = true, variant = 'home', overrideHour = null 
           contentPosition="center"
           cachePolicy="memory-disk"
           priority="high"
-          transition={180}
+          transition={0}
           onError={() => setFailedWallpaperKey(wallpaperKey)}
           style={StyleSheet.absoluteFillObject}
         />

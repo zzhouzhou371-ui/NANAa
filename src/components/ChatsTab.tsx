@@ -1,4 +1,4 @@
-import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import {
   Banknote,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useNanaStore } from '../stores/nanaStore';
+import { useStableViewportMetrics } from '../hooks/useStableViewportMetrics';
 import type { Message, Payment, RelationshipTrace } from '../types';
 import { SearchBar } from './SearchBar';
 import { AnimatedPressable } from './primitives';
@@ -62,8 +63,7 @@ export function ChatsTab() {
   const paymentsById = useNanaStore(s => s.paymentsById);
   const searchQuery = useNanaStore(s => s.searchQuery);
   const set = useNanaStore.setState;
-  const { width, height } = useWindowDimensions();
-  const compact = width <= 360 || height < 700;
+  const { compact } = useStableViewportMetrics();
   const gutter = compact ? 0 : 4;
   const friendChars = characters.filter(character => friends.includes(character.id));
   const filtered = searchQuery

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { MeetingConfig } from '../features/meeting/domain/meeting-types';
 
 export type LegacyPaymentMessageType = 'transfer' | 'redpacket' | 'transfer_received' | 'redpacket_received';
 export type MessageType = 'text' | 'voice' | 'image' | 'sticker' | 'payment' | LegacyPaymentMessageType | 'system';
@@ -6,6 +7,7 @@ export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 
 export type ConversationEmotion = 'neutral' | 'warm' | 'playful' | 'concerned' | 'tense' | 'tender' | 'reflective';
 export type ConversationOpenLoopKind = 'question' | 'promise' | 'plan' | 'concern';
 export type ConversationOpenLoopOwner = 'user' | 'character' | 'shared';
+export type ConversationMeetingHandoffState = 'available' | 'dismissed' | 'started';
 
 /** @deprecated Persisted V1/UI compatibility. New product code uses ChatReplyPreference. */
 export type ReplyMode = 'auto' | 'text' | 'voice';
@@ -61,6 +63,8 @@ export interface Message {
   audioUri?: string;
   audioDurationSec?: number;
   transcript?: string;
+  voiceTranscriptionStatus?: 'pending' | 'ready' | 'failed' | 'unavailable';
+  voiceTranscriptionError?: string;
   imageUri?: string;
   imageWidth?: number;
   imageHeight?: number;
@@ -105,6 +109,19 @@ export interface ConversationOpenLoop {
   expiresAt: number;
 }
 
+export interface ConversationMeetingHandoff {
+  id: string;
+  state: ConversationMeetingHandoffState;
+  title?: string;
+  premise: string;
+  sourceTurnId: string;
+  sourceMessageIds: number[];
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+  sceneId?: string;
+}
+
 export interface ConversationContinuityState {
   schemaVersion: 1;
   characterId: string;
@@ -114,6 +131,7 @@ export interface ConversationContinuityState {
   emotionExpiresAt: number;
   topics: ConversationTopic[];
   openLoops: ConversationOpenLoop[];
+  meetingHandoff?: ConversationMeetingHandoff;
   lastTurnId?: string;
   updatedAt: number;
   expiresAt: number;
@@ -194,6 +212,8 @@ export interface Preset {
   jailbreak: string[];
   authorsNote: string[];
   authorsNoteDepth: number;
+  /** Offline-only scene presentation and structured status configuration. */
+  meetingConfig?: MeetingConfig;
 }
 
 export interface MemoryRecord {
@@ -399,7 +419,7 @@ export interface CallLog {
 
 export type HapticType = 'light' | 'medium' | 'heavy' | 'success' | 'error';
 
-export type AppName = 'wechat' | 'characters' | 'settings' | 'worldbook' | 'theme' | 'user' | 'presets';
+export type AppName = 'wechat' | 'meeting' | 'characters' | 'settings' | 'worldbook' | 'theme' | 'user' | 'presets';
 export type WeChatTab = 'chats' | 'contacts' | 'discover' | 'me';
 export type WeChatPage = 'root' | 'chat' | 'profile' | 'moments' | 'stickers' | 'wallet' | 'context';
 export type ChatPanel = 'none' | 'voice' | 'emoji' | 'plus';
